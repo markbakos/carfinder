@@ -355,6 +355,65 @@ def create_router(settings: Settings) -> APIRouter:
         adapter = get_provider("polovniautomobili")
         return [{"id": adapter.provider_id, "capabilities": adapter.capabilities.model_dump()}]
 
+    @api.get("/filter-options")
+    def filter_options() -> dict[str, Any]:
+        engine = _engine(settings)
+        try:
+            with Session(engine) as session:
+                vehicle_rows = session.execute(
+                    select(ListingSnapshot.make, ListingSnapshot.model, ListingSnapshot.generation)
+                    .join(Listing, Listing.current_snapshot_id == ListingSnapshot.id)
+                    .distinct()
+                ).all()
+                location_rows = session.execute(
+                    select(ListingSnapshot.city, ListingSnapshot.region, ListingSnapshot.location_raw)
+                    .join(Listing, Listing.current_snapshot_id == ListingSnapshot.id)
+                    .distinct()
+                ).all()
+                seller_types = session.scalars(
+                    select(ListingSnapshot.seller_type).join(
+                        Listing, Listing.current_snapshot_id == ListingSnapshot.id
+                    ).distinct()
+                ).all()
+                condition_rows = session.scalars(
+                    select(ListingSnapshot.condition_json).join(
+                        Listing, Listing.current_snapshot_id == ListingSnapshot.id
+                    ).distinct()
+                ).all()
+                feature_rows = session.scalars(
+                    select(ListingSnapshot.features_json).join(
+                        Listing, Listing.current_snapshot_id == ListingSnapshot.id
+                    ).distinct()
+                ).all()
+
+                def values(items: list[Any]) -> list[str]:
+                    return sorted({str(item).strip() for item in items if item and str(item).strip()}, key=str.casefold)
+
+                return {
+                    "vehicles": [
+                        {"make": make, "model": model, "generation": generation}
+                        for make, model, generation in vehicle_rows
+                        if make or model or generation
+                    ],
+                    "locations": values([value for row in location_rows for value in row]),
+                    "seller_types": values(seller_types),
+                    "vehicle_origins": values([
+                        condition.get("origin") for condition in condition_rows
+                        if isinstance(condition, dict)
+                    ]),
+                    "damage_types": values([
+                        condition.get("damage") for condition in condition_rows
+                        if isinstance(condition, dict)
+                    ]),
+                    "equipment": values([
+                        feature for features in feature_rows
+                        if isinstance(features, list)
+                        for feature in features
+                    ]),
+                }
+        finally:
+            engine.dispose()
+
     @api.get("/schedule")
     def schedule_status() -> dict[str, Any]:
         return _systemd_status()
@@ -495,10 +554,12 @@ def create_router(settings: Settings) -> APIRouter:
     def listings(
         profile: int | None = None,
         provider: str | None = None,
-        make: str | None = None,
-        model: str | None = None,
-        generation: str | None = None,
-        fuel: str | None = None,
+        make: list[str] | None = Query(default=None),
+        model: list[str] | None = Query(default=None),
+        generation: list[str] | None = Query(default=None),
+        fuel: list[str] | None = Query(default=None),
+        transmission: list[str] | None = Query(default=None),
+        body_type: list[str] | None = Query(default=None),
         year_min: int | None = None,
         year_max: int | None = None,
         price_min: int | None = None,
@@ -531,10 +592,14 @@ def create_router(settings: Settings) -> APIRouter:
                 conditions = []
                 if provider:
                     conditions.append(Listing.provider == provider)
-                for supplied, column in ((make, ListingSnapshot.make), (model, ListingSnapshot.model),
-                                         (generation, ListingSnapshot.generation), (fuel, ListingSnapshot.fuel)):
-                    if supplied:
-                        conditions.append(func.lower(column) == supplied.strip().lower())
+                for supplied, column in (
+                    (make, ListingSnapshot.make), (model, ListingSnapshot.model),
+                    (generation, ListingSnapshot.generation), (fuel, ListingSnapshot.fuel),
+                    (transmission, ListingSnapshot.transmission), (body_type, ListingSnapshot.body_type),
+                ):
+                    values = [value.strip().lower() for value in supplied or [] if value.strip()]
+                    if values:
+                        conditions.append(func.lower(column).in_(values))
                 if year_min is not None:
                     conditions.append(ListingSnapshot.year >= year_min)
                 if year_max is not None:

@@ -98,6 +98,15 @@ export type Profile = {
   sources: Array<{ id: number; provider: string; search_url: string | null; enabled: boolean; settings: Record<string, unknown> }>
 }
 
+export type SearchFilterOptions = {
+  vehicles: Array<{ make: string | null; model: string | null; generation: string | null }>
+  locations: string[]
+  seller_types: string[]
+  vehicle_origins: string[]
+  damage_types: string[]
+  equipment: string[]
+}
+
 export type Run = {
   id: number
   started_at: string
