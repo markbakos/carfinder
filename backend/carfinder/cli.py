@@ -1,22 +1,31 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 from importlib.util import find_spec
 from pathlib import Path
 
 import typer
 from pydantic import ValidationError
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
 from carfinder.config import Settings
 from carfinder.db.engine import create_database_engine
 from carfinder.db.migrations import migration_status, upgrade_database
+from carfinder.db.models import ProviderSource, SearchProfile
 from carfinder.logging_config import configure_logging
 from carfinder.paths import AppPaths
+from carfinder.pipeline.lock import RunAlreadyActive, run_lock
+from carfinder.pipeline.runner import run_pipeline
+from carfinder.providers.base import ProviderSearchSource
+from carfinder.providers.registry import get_provider
 
 app = typer.Typer(no_args_is_help=True, help="Local-first used-car discovery and buying intelligence.")
 db_app = typer.Typer(no_args_is_help=True)
+profile_app = typer.Typer(no_args_is_help=True)
 app.add_typer(db_app, name="db")
+app.add_typer(profile_app, name="profile")
 
 
 @app.callback()
@@ -125,15 +134,49 @@ def doctor() -> None:
     typer.echo(f"Doctor passed with {warnings} warning(s).")
 
 
+def _run_pipeline_command(profile: str | None, provider: str | None) -> None:
+    """Execute the full local pipeline without an API or UI process."""
+    settings = _settings_or_exit()
+    paths = AppPaths.from_environment()
+    try:
+        with run_lock(paths.lock_file):
+            summary = asyncio.run(run_pipeline(settings, profile_name=profile, provider_id=provider))
+    except RunAlreadyActive:
+        typer.echo("run already active")
+        return
+    except Exception as error:
+        typer.echo(f"Run failed: {type(error).__name__}: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Run #{summary.run_id}: {summary.status}")
+    typer.echo(f"Profiles processed: {summary.profiles_processed}")
+    typer.echo(f"Sources processed: {summary.sources_processed}")
+    typer.echo(f"Listings encountered: {summary.listings_seen}")
+    typer.echo(f"New listings: {summary.listings_new}")
+    typer.echo(f"Changed listings: {summary.listings_changed}")
+    typer.echo(f"Price drops: {summary.price_drops}")
+    typer.echo(f"Removed listings: {summary.listings_removed}")
+    typer.echo(f"Detail requests: {summary.detail_requests}")
+    typer.echo(f"Warnings: {summary.warning_count}; errors: {summary.error_count}")
+    if summary.status == "failed":
+        raise typer.Exit(1)
+
+
 @app.command()
 def run(
     profile: str | None = typer.Option(None, help="Limit to one saved profile."),
     provider: str | None = typer.Option(None, help="Limit to one provider."),
 ) -> None:
     """Run discovery and analysis without requiring the API or UI."""
-    del profile, provider
-    typer.echo("Provider ingestion is not implemented yet (Phase 1).", err=True)
-    raise typer.Exit(2)
+    _run_pipeline_command(profile, provider)
+
+
+@app.command()
+def scrape(
+    profile: str | None = typer.Option(None, help="Limit to one saved profile."),
+    provider: str | None = typer.Option(None, help="Limit to one provider."),
+) -> None:
+    """Alias for run, useful for scripts that call the collection step scrape."""
+    _run_pipeline_command(profile, provider)
 
 
 @app.command()
@@ -143,6 +186,115 @@ def serve() -> None:
     import uvicorn
 
     uvicorn.run("carfinder.api.app:app", host=settings.server.host, port=settings.server.port)
+
+
+@profile_app.command("create")
+def profile_create(
+    name: str,
+    search_url: str = typer.Option(..., "--search-url", help="Saved PolovniAutomobili search URL."),
+    provider: str = typer.Option("polovniautomobili", help="Listing provider ID."),
+    initial_import_mode: str = typer.Option("seed_only", help="seed_only, analyze_all, or analyze_top_n."),
+    analyze_top_n: int = typer.Option(25, min=1, help="Maximum initial listings for analyze_top_n."),
+) -> None:
+    """Create a profile backed by an imported provider search URL."""
+    if initial_import_mode not in {"seed_only", "analyze_all", "analyze_top_n"}:
+        typer.echo("initial-import-mode must be seed_only, analyze_all, or analyze_top_n", err=True)
+        raise typer.Exit(2)
+    try:
+        adapter = get_provider(provider)
+    except ValueError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(2) from error
+    source = ProviderSearchSource(provider=provider, search_url=search_url)
+    result = adapter.validate_source(source)
+    if not result.valid:
+        typer.echo(result.message, err=True)
+        raise typer.Exit(2)
+
+    settings = _settings_or_exit()
+    engine = create_database_engine(settings.database_path)
+    try:
+        with Session(engine) as session:
+            profile = SearchProfile(name=name, initial_import_mode=initial_import_mode)
+            session.add(profile)
+            session.flush()
+            session.add(ProviderSource(
+                profile_id=profile.id,
+                provider=provider,
+                search_url=search_url.strip(),
+                source_settings_json={"analyze_top_n": analyze_top_n} if initial_import_mode == "analyze_top_n" else {},
+            ))
+            session.commit()
+            typer.echo(f"Created profile #{profile.id}: {profile.name}")
+    except Exception as error:
+        typer.echo(f"Could not create profile: {error}", err=True)
+        raise typer.Exit(1) from error
+    finally:
+        engine.dispose()
+
+
+@profile_app.command("list")
+def profile_list() -> None:
+    """List saved search profiles."""
+    settings = _settings_or_exit()
+    engine = create_database_engine(settings.database_path)
+    try:
+        with Session(engine) as session:
+            profiles = session.scalars(select(SearchProfile).order_by(SearchProfile.id)).all()
+            if not profiles:
+                typer.echo("No saved profiles.")
+                return
+            for item in profiles:
+                state = "enabled" if item.enabled else "disabled"
+                typer.echo(f"{item.id}\t{item.name}\t{state}\t{item.initial_import_mode}")
+    finally:
+        engine.dispose()
+
+
+@profile_app.command("show")
+def profile_show(profile_id: int) -> None:
+    """Show a saved search profile and its provider sources."""
+    settings = _settings_or_exit()
+    engine = create_database_engine(settings.database_path)
+    try:
+        with Session(engine) as session:
+            item = session.get(SearchProfile, profile_id)
+            if item is None:
+                typer.echo(f"Profile not found: {profile_id}", err=True)
+                raise typer.Exit(1)
+            typer.echo(f"Profile #{item.id}: {item.name}")
+            typer.echo(f"Enabled: {item.enabled}; initial import: {item.initial_import_mode}")
+            for source in session.scalars(select(ProviderSource).where(ProviderSource.profile_id == item.id)):
+                typer.echo(f"Source #{source.id} [{source.provider}] {'enabled' if source.enabled else 'disabled'}")
+                typer.echo(f"  {source.search_url}")
+    finally:
+        engine.dispose()
+
+
+def _profile_set_enabled(profile_id: int, enabled: bool) -> None:
+    settings = _settings_or_exit()
+    engine = create_database_engine(settings.database_path)
+    try:
+        with Session(engine) as session:
+            item = session.get(SearchProfile, profile_id)
+            if item is None:
+                typer.echo(f"Profile not found: {profile_id}", err=True)
+                raise typer.Exit(1)
+            item.enabled = enabled
+            session.commit()
+            typer.echo(f"Profile {item.id} {'enabled' if enabled else 'disabled'}.")
+    finally:
+        engine.dispose()
+
+
+@profile_app.command("enable")
+def profile_enable(profile_id: int) -> None:
+    _profile_set_enabled(profile_id, True)
+
+
+@profile_app.command("disable")
+def profile_disable(profile_id: int) -> None:
+    _profile_set_enabled(profile_id, False)
 
 
 @db_app.command("migrate")

@@ -1,0 +1,20 @@
+{
+  "provider": "polovniautomobili",
+  "external_id": "10000000",
+  "title": "Citroen C5 Aircross 1.5 BlueHDi Shine 2020. godište",
+  "price_amount": 13550,
+  "price_currency": "EUR",
+  "make": "Citroen",
+  "model": "C5 Aircross",
+  "year": 2020,
+  "fuel": "diesel",
+  "mileage_km": 146930,
+  "engine_cc": 1499,
+  "transmission": "automatic",
+  "body_type": "suv",
+  "city": "Novi Sad",
+  "seller_type": "dealer",
+  "images": ["https://www.polovniautomobili.com/media/fixture-car.jpg"],
+  "description_contains": "Poslednji servis 01.06.2025.",
+  "contact_markers": ["[phone]", "[email]"]
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "provider": "polovniautomobili",
+    "external_id": "10000001",
+    "url": "https://www.polovniautomobili.com/auto-oglasi/10000001/volkswagen-golf",
+    "title": "Volkswagen Golf 1"
+  },
+  {
+    "provider": "polovniautomobili",
+    "external_id": "10000002",
+    "url": "https://www.polovniautomobili.com/auto-oglasi/10000002/yugo-45",
+    "title": "Yugo"
+  }
+]

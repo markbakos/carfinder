@@ -26,7 +26,7 @@ class ScrapingConfig(_ConfigModel):
 
 
 class PolovniConfig(_ConfigModel):
-    enabled: bool = False
+    enabled: bool = True
     headless: bool = True
     browser_profile: Path | None = None
 

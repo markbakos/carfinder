@@ -9,7 +9,7 @@ request_delay_seconds = 2.5
 max_concurrent_detail_requests = 1
 
 [providers.polovniautomobili]
-enabled = false
+enabled = true
 headless = true
 # Defaults to the app data directory's browser/polovni profile.
 

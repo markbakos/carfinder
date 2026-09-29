@@ -1,0 +1,17 @@
+{
+  "provider": "polovniautomobili",
+  "external_id": "10000002",
+  "title": "Yugo 45",
+  "price_amount": null,
+  "price_currency": null,
+  "make": "Zastava",
+  "model": "Yugo 45",
+  "year": 1987,
+  "fuel": "petrol",
+  "mileage_km": 42000,
+  "transmission": "manual",
+  "seller_type": "private",
+  "features": ["ABS", "ESP", "Klima uređaj"],
+  "damage_claim": "Oštećen",
+  "description": ""
+}
