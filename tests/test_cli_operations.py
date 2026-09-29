@@ -34,6 +34,7 @@ def test_db_backup_copies_committed_wal_data(monkeypatch, tmp_path: Path) -> Non
 
 def test_systemd_install_renders_user_units(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CARFINDER_HOME", str(tmp_path / "runtime"))
+    monkeypatch.setenv("CARFINDER_DATABASE_PATH", str(tmp_path / "runtime/custom.sqlite3"))
     monkeypatch.setenv("PATH", "/opt/carfinder/bin:/usr/bin")
     active_executable = tmp_path / "venv/bin/carfinder"
     active_executable.parent.mkdir(parents=True)
@@ -50,7 +51,10 @@ def test_systemd_install_renders_user_units(monkeypatch, tmp_path: Path) -> None
     service = (unit_dir / "carfinder.service").read_text(encoding="utf-8")
     timer = (unit_dir / "carfinder.timer").read_text(encoding="utf-8")
     assert 'Environment="PATH=/opt/carfinder/bin:/usr/bin"' in service
+    assert f'Environment="CARFINDER_HOME={tmp_path / "runtime"}"' in service
+    assert f'Environment="CARFINDER_DATABASE_PATH={tmp_path / "runtime/custom.sqlite3"}"' in service
     assert f'ExecStart="{active_executable}" run' in service
+    assert "TimeoutStartSec=infinity" in service
     assert "OnCalendar=weekly" in timer
     assert "RandomizedDelaySec=42" in timer
     assert "Persistent=true" in timer

@@ -14,11 +14,12 @@ npm install
 npm run build
 cd ..
 uv run carfinder init
-uv run carfinder doctor
 uv run carfinder serve
 ```
 
-The local API defaults to `http://127.0.0.1:8420`. During frontend development, use `uv run carfinder serve` in one terminal and `npm run dev` in `frontend/` in another.
+Open `http://127.0.0.1:8420`, choose **Search profiles → New profile**, and set the car filters and PolovniAutomobili searches there. For the provider's full filter set, configure the search on PolovniAutomobili and paste its URL into the profile. CarFinder follows every result page and spaces requests using its conservative delay, so very broad searches can take a while.
+
+Use **Settings → Enable automatic scans** to install and start the systemd user timer. The timer runs `carfinder run` as its own process; the API and UI can be closed. Node is needed for the initial UI build, not for scheduled scans or normal use after that. During frontend development, run `uv run carfinder serve` and `npm run dev` in separate terminals.
 
 Create a native-filter profile, or import a search URL copied from PolovniAutomobili for its full provider-specific filter set:
 
@@ -58,7 +59,7 @@ JSON uses the normalized listing field names, such as `url`, `title`, `descripti
 
 ## Scheduled scans and backups
 
-Generate a systemd user service and timer for the active CarFinder executable:
+The UI can install, change, and pause the systemd user timer. The timer uses the active CarFinder executable and the same local database, even when the UI is stopped. From a terminal, the equivalent commands are:
 
 ```sh
 uv run carfinder systemd install
@@ -69,7 +70,7 @@ systemctl --user list-timers
 journalctl --user -u carfinder.service
 ```
 
-The default schedule runs at 08:00, 14:00 and 20:00 with a five-minute randomized delay. Change it with `--calendar`, for example `uv run carfinder systemd install --calendar 'daily 09:30'`. Installation only writes the unit files; enable the timer separately. `carfinder doctor` checks provider reachability and, when enabled, exercises the configured LLM's structured-output path with synthetic data. Create a consistent SQLite backup at any time with `uv run carfinder db backup`; use `--output PATH` to choose its destination.
+The default schedule runs at 08:00, 14:00 and 20:00 with a five-minute randomized delay. `carfinder doctor` checks provider reachability and, when enabled, exercises the configured LLM's structured-output path with synthetic data. Create a consistent SQLite backup at any time with `uv run carfinder db backup`; use `--output PATH` to choose its destination.
 
 Runtime data uses XDG paths by default. Set `CARFINDER_HOME=./.data` for a disposable development data/config/state tree; this path is ignored by Git.
 

@@ -79,6 +79,7 @@ def test_local_ui_core_workflows(monkeypatch, tmp_path) -> None:
                 except PlaywrightError as error:
                     pytest.skip(f"install Playwright Chromium to run UI smoke coverage: {error}")
                 page = browser.new_page(viewport={"width": 1280, "height": 900})
+                page.route("**/api/schedule", lambda route: route.fulfill(status=200, json={"available": True, "enabled": False, "active": False, "calendar": None, "message": None}))
                 page.goto(base_url, wait_until="networkidle")
                 assert page.get_by_role("heading", name="Good morning.").is_visible()
                 page.get_by_role("link", name="Listings", exact=True).click()
@@ -102,8 +103,17 @@ def test_local_ui_core_workflows(monkeypatch, tmp_path) -> None:
                 page.get_by_role("button", name="New profile").click()
                 page.get_by_label("Profile name").fill("Created from browser")
                 page.get_by_label("Makes").fill("Volkswagen")
+                page.get_by_label("PolovniAutomobili search URL").fill("https://www.polovniautomobili.com/auto-oglasi/pretraga?brand=volkswagen")
+                page.get_by_role("button", name="Add another marketplace search").click()
+                page.get_by_label("PolovniAutomobili search URL").nth(1).fill("https://www.polovniautomobili.com/auto-oglasi/pretraga?brand=skoda")
                 page.get_by_role("button", name="Save profile").click()
                 page.get_by_role("heading", name="Created from browser").wait_for(state="visible")
+                page.get_by_text("2 provider sources").wait_for(state="visible")
+
+                page.get_by_role("link", name="Settings", exact=True).click()
+                page.get_by_role("heading", name="Automatic scans").wait_for(state="visible")
+                page.get_by_label("Scan schedule").select_option("*-*-* 09:00:00")
+                assert page.get_by_role("button", name="Enable automatic scans").is_visible()
 
                 page.get_by_role("link", name="Runs", exact=True).click()
                 page.get_by_role("button", name="Run #1").click()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import httpx
 from sqlalchemy.orm import Session
@@ -142,4 +143,35 @@ def test_manual_import_api_is_idempotent_and_validates_input(monkeypatch, tmp_pa
             invalid = await client.post("/api/import", json={**payload, "year": 3000})
             assert invalid.status_code == 422
 
+    asyncio.run(exercise())
+
+
+def test_schedule_can_be_enabled_through_local_api(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CARFINDER_HOME", str(tmp_path / "runtime"))
+    settings = Settings.load()
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="active", stderr="")
+
+    monkeypatch.setattr("carfinder.api.routes.subprocess.run", run)
+    app = create_app(settings)
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/schedule", json={"calendar": "*-*-* 09:00:00"})
+            assert response.status_code == 200, response.text
+            assert response.json()["active"] is True
+            assert calls[0][1:] == ["systemd", "install", "--calendar", "*-*-* 09:00:00"]
+            assert calls[1] == ["/usr/bin/systemctl", "--user", "daemon-reload"]
+            assert calls[2] == ["/usr/bin/systemctl", "--user", "enable", "--now", "carfinder.timer"]
+            assert calls[3] == ["/usr/bin/systemctl", "--user", "restart", "carfinder.timer"]
+            assert calls[4][2] == "is-enabled"
+            assert calls[5][2] == "is-active"
+
+    monkeypatch.setattr("carfinder.api.routes.sys.argv", ["pytest"])
+    monkeypatch.setattr("carfinder.api.routes.shutil.which", lambda name: {
+        "systemctl": "/usr/bin/systemctl", "carfinder": "/opt/carfinder/bin/carfinder",
+    }.get(name))
     asyncio.run(exercise())

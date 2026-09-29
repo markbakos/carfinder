@@ -7,6 +7,7 @@ name = "carfinder"
 version = "0.1.0"
 description = "Local-first used-car discovery and buying intelligence"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.13,<2",

@@ -5,13 +5,17 @@ import { api, errorMessage } from '../api'
 import type { Profile, Run } from '../api'
 import { Badge, EmptyNotice, ErrorNotice, Field, LoadingNotice, PageTitle, Panel } from '../ui'
 
-const listFields = [
+const primaryListFields = [
   ['makes', 'Makes'], ['models', 'Models'], ['generations', 'Generations'], ['fuel', 'Fuel'],
-  ['transmission', 'Transmission'], ['body_type', 'Body types'], ['regions', 'Regions'],
-  ['seller_type', 'Seller type'], ['vehicle_origin', 'Vehicle origin'], ['damage', 'Damage'],
+  ['transmission', 'Transmission'], ['body_type', 'Body types'],
 ] as const
-const rangeFields = [
+const advancedListFields = [
+  ['regions', 'Regions'], ['seller_type', 'Seller type'], ['vehicle_origin', 'Vehicle origin'], ['damage', 'Damage'],
+] as const
+const primaryRangeFields = [
   ['year', 'Year', 'year'], ['price', 'Price', 'amount'], ['mileage_km', 'Mileage (km)', 'km'],
+] as const
+const advancedRangeFields = [
   ['engine_cc', 'Engine size (cc)', 'cc'], ['power_kw', 'Power (kW)', 'kW'],
 ] as const
 const preferenceLists = [
@@ -21,8 +25,7 @@ const preferenceLists = [
 
 type Draft = {
   name: string
-  searchUrl: string
-  sources: Profile['sources']
+  sources: Array<{ provider: string; search_url: string; enabled: boolean; settings: Record<string, unknown> }>
   enabled: boolean
   initialImportMode: Profile['initial_import_mode']
   lists: Record<string, string>
@@ -65,12 +68,13 @@ function makeDraft(profile?: Profile): Draft {
   const discountPreference = asObject(preferences.market_discount)
   return {
     name: profile?.name ?? '',
-    searchUrl: profile?.sources.find((source) => source.provider === 'polovniautomobili')?.search_url ?? '',
-    sources: profile?.sources ?? [],
+    sources: profile?.sources.length
+      ? profile.sources.map(({ provider, search_url, enabled, settings }) => ({ provider, search_url: search_url ?? '', enabled, settings }))
+      : [{ provider: 'polovniautomobili', search_url: '', enabled: true, settings: {} }],
     enabled: profile?.enabled ?? true,
     initialImportMode: profile?.initial_import_mode ?? 'seed_only',
-    lists: Object.fromEntries(listFields.map(([key]) => [key, joinedValues(filters[key])])),
-    ranges: Object.fromEntries(rangeFields.map(([key]) => [key, rangeDraft(filters, key)])),
+    lists: Object.fromEntries([...primaryListFields, ...advancedListFields].map(([key]) => [key, joinedValues(filters[key])])),
+    ranges: Object.fromEntries([...primaryRangeFields, ...advancedRangeFields].map(([key]) => [key, rangeDraft(filters, key)])),
     idealMileage: asText(mileagePreference.ideal_max),
     idealPrice: asText(pricePreference.ideal_max),
     preferredMinDiscount: asText(discountPreference.preferred_min_pct),
@@ -100,21 +104,14 @@ function payloadFromDraft(draft: Draft) {
   return {
     name: draft.name.trim(), enabled: draft.enabled, filters, preferences,
     initial_import_mode: draft.initialImportMode,
-    sources: (() => {
-      let updated = false
-      const sources = draft.sources.map((source) => {
-        if (source.provider !== 'polovniautomobili' || updated) return { provider: source.provider, search_url: source.search_url, enabled: source.enabled, settings: source.settings }
-        updated = true
-        return { provider: source.provider, search_url: draft.searchUrl.trim() || null, enabled: source.enabled, settings: source.settings }
-      })
-      return draft.sources.length ? sources : [{ provider: 'polovniautomobili', search_url: draft.searchUrl.trim() || null, enabled: true, settings: {} }]
-    })(),
+    sources: draft.sources.map((source) => ({ ...source, search_url: source.search_url.trim() || null })),
   }
 }
 
 export default function ProfilesPage() {
   const client = useQueryClient()
   const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => api<Profile[]>('/api/profiles') })
+  const providers = useQuery({ queryKey: ['providers'], queryFn: () => api<Array<{ id: string; capabilities: { supports_search_url: boolean } }>>('/api/providers') })
   const [editing, setEditing] = useState<number | 'new' | null>(null)
   const [draft, setDraft] = useState<Draft>(() => makeDraft())
   const [feedback, setFeedback] = useState('')
@@ -139,6 +136,13 @@ export default function ProfilesPage() {
     setDraft((current) => ({ ...current, ranges: { ...current.ranges, [key]: { ...current.ranges[key], [part]: value } } }))
   }
   function updatePreference(key: string, value: string) { setDraft((current) => ({ ...current, preferences: { ...current.preferences, [key]: value } })) }
+  function updateSource(index: number, patch: Partial<Draft['sources'][number]>) {
+    setDraft((current) => ({ ...current, sources: current.sources.map((source, sourceIndex) => sourceIndex === index ? { ...source, ...patch } : source) }))
+  }
+  function addSource() {
+    const provider = providers.data?.[0]?.id ?? 'polovniautomobili'
+    setDraft((current) => ({ ...current, sources: [...current.sources, { provider, search_url: '', enabled: true, settings: {} }] }))
+  }
   function handleSave(event: FormEvent<HTMLFormElement>) { event.preventDefault(); save.mutate() }
 
   return <main className="content">
@@ -148,24 +152,36 @@ export default function ProfilesPage() {
 
     {editing !== null && <Panel title={editing === 'new' ? 'Create a search profile' : 'Edit search profile'} eyebrow="PROFILE EDITOR" className="editor-panel" action={<button className="button button-quiet" onClick={() => setEditing(null)}>Cancel</button>}>
       <form onSubmit={handleSave} className="profile-form">
-        <div className="filter-grid filter-grid-main">
+        <div className="profile-section"><h3>What cars are you looking for?</h3><p>Leave a field empty to keep that filter open. Commas mean any of those values.</p>
           <Field label="Profile name"><input required maxLength={120} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Golf V diesel" /></Field>
-          <Field label="First scan behavior"><select value={draft.initialImportMode} onChange={(event) => setDraft((current) => ({ ...current, initialImportMode: event.target.value as Draft['initialImportMode'] }))}><option value="seed_only">Seed only</option><option value="analyze_all">Analyze all results</option><option value="analyze_top_n">Analyze top 25</option></select></Field>
+          <div className="filter-grid profile-list-fields">{primaryListFields.map(([key, label]) => <Field label={label} key={key} hint="Optional · comma-separated"><input value={draft.lists[key] ?? ''} onChange={(event) => updateList(key, event.target.value)} placeholder={`Any ${label.toLowerCase()}`} /></Field>)}</div>
+          <div className="range-editor-grid">{primaryRangeFields.map(([key, label, unit]) => <div className="range-field" key={key}>
+            <strong>{label}</strong><Field label="From"><input type="number" min="0" value={draft.ranges[key]?.min ?? ''} onChange={(event) => updateRange(key, 'min', event.target.value)} /></Field><Field label="To"><input type="number" min="0" value={draft.ranges[key]?.max ?? ''} onChange={(event) => updateRange(key, 'max', event.target.value)} /></Field>
+            {key === 'price' && <Field label="Currency"><select value={draft.ranges.price?.currency ?? 'EUR'} onChange={(event) => updateRange('price', 'currency', event.target.value)}><option>EUR</option><option>RSD</option></select></Field>}
+            <small>{unit}</small>
+          </div>)}</div>
+          <details className="profile-details"><summary>More vehicle filters</summary><div className="filter-grid profile-list-fields">{advancedListFields.map(([key, label]) => <Field label={label} key={key} hint="Optional · comma-separated"><input value={draft.lists[key] ?? ''} onChange={(event) => updateList(key, event.target.value)} /></Field>)}</div><div className="range-editor-grid">{advancedRangeFields.map(([key, label, unit]) => <div className="range-field" key={key}><strong>{label}</strong><Field label="From"><input type="number" min="0" value={draft.ranges[key]?.min ?? ''} onChange={(event) => updateRange(key, 'min', event.target.value)} /></Field><Field label="To"><input type="number" min="0" value={draft.ranges[key]?.max ?? ''} onChange={(event) => updateRange(key, 'max', event.target.value)} /></Field><small>{unit}</small></div>)}</div></details>
         </div>
-        <div className="filter-grid profile-list-fields">{listFields.map(([key, label]) => <Field label={label} key={key} hint="Separate multiple values with commas"><input value={draft.lists[key] ?? ''} onChange={(event) => updateList(key, event.target.value)} placeholder={`Any ${label.toLowerCase()}`} /></Field>)}</div>
-        <div className="range-editor-grid">{rangeFields.map(([key, label, unit]) => <div className="range-field" key={key}>
-          <strong>{label}</strong><Field label="From"><input type="number" min="0" value={draft.ranges[key]?.min ?? ''} onChange={(event) => updateRange(key, 'min', event.target.value)} /></Field><Field label="To"><input type="number" min="0" value={draft.ranges[key]?.max ?? ''} onChange={(event) => updateRange(key, 'max', event.target.value)} /></Field>
-          {key === 'price' && <Field label="Currency"><select value={draft.ranges.price?.currency ?? 'EUR'} onChange={(event) => updateRange('price', 'currency', event.target.value)}><option>EUR</option><option>RSD</option></select></Field>}
-          <small>{unit}</small>
-        </div>)}</div>
-        <div className="profile-section"><h3>Soft preferences</h3><p>Preferences change suitability scores but never remove a listing.</p>
+        <details className="profile-details"><summary>Soft preferences and first scan</summary><p>Preferences change suitability scores but never hide listings.</p>
           <div className="filter-grid profile-list-fields">{preferenceLists.map(([key, label]) => <Field label={label} key={key} hint="Comma-separated"><input value={draft.preferences[key] ?? ''} onChange={(event) => updatePreference(key, event.target.value)} /></Field>)}
             <Field label="Ideal mileage up to (km)"><input type="number" min="0" value={draft.idealMileage} onChange={(event) => setDraft((current) => ({ ...current, idealMileage: event.target.value }))} /></Field>
             <Field label="Ideal price up to (EUR)"><input type="number" min="0" value={draft.idealPrice} onChange={(event) => setDraft((current) => ({ ...current, idealPrice: event.target.value }))} /></Field>
             <Field label="Preferred minimum discount (%)"><input type="number" min="0" max="100" value={draft.preferredMinDiscount} onChange={(event) => setDraft((current) => ({ ...current, preferredMinDiscount: event.target.value }))} /></Field>
+            <Field label="First scan behavior"><select value={draft.initialImportMode} onChange={(event) => setDraft((current) => ({ ...current, initialImportMode: event.target.value as Draft['initialImportMode'] }))}><option value="seed_only">Save listings, analyze later</option><option value="analyze_all">Analyze all results</option><option value="analyze_top_n">Analyze top 25</option></select></Field>
           </div>
+        </details>
+        <div className="profile-section"><h3>Marketplace searches</h3><p>Each search is saved with this profile. Use the provider's search page for its full filter set; CarFinder checks every result page automatically. Very broad searches can take a while.</p>
+          {draft.sources.map((source, index) => {
+            const provider = providers.data?.find((item) => item.id === source.provider)
+            const label = source.provider === 'polovniautomobili' ? 'PolovniAutomobili' : source.provider
+            return <div className="provider-source-editor" key={`${source.provider}-${index}`}>
+              <div className="filter-grid filter-grid-main"><Field label="Marketplace"><select value={source.provider} onChange={(event) => updateSource(index, { provider: event.target.value, search_url: '' })}>{(providers.data ?? [{ id: source.provider, capabilities: { supports_search_url: true } }]).map((item) => <option key={item.id} value={item.id}>{item.id === 'polovniautomobili' ? 'PolovniAutomobili' : item.id}</option>)}</select></Field><label className="check-field"><input type="checkbox" checked={source.enabled} onChange={(event) => updateSource(index, { enabled: event.target.checked })} /><span>Include this search</span></label><button type="button" className="button button-quiet" onClick={() => setDraft((current) => ({ ...current, sources: current.sources.filter((_, sourceIndex) => sourceIndex !== index) }))}>Remove search</button></div>
+              {provider?.capabilities.supports_search_url !== false && <Field label={`${label} search URL`} hint="Paste the complete filtered-search link. All provider filters in that link are retained."><textarea rows={2} value={source.search_url} onChange={(event) => updateSource(index, { search_url: event.target.value })} placeholder="https://www.polovniautomobili.com/auto-oglasi/pretraga…" /></Field>}
+            </div>
+          })}
+          <button type="button" className="button button-quiet" onClick={addSource}>＋ Add another marketplace search</button>
+          <p><a href="https://www.polovniautomobili.com/auto-oglasi/pretraga" target="_blank" rel="noreferrer">Open PolovniAutomobili search ↗</a> to set detailed filters, then paste its URL above.</p>
         </div>
-        <Field label="PolovniAutomobili search URL" hint="Paste the complete search link to preserve provider-specific filters. Native filters still apply locally."><textarea rows={3} value={draft.searchUrl} onChange={(event) => setDraft((current) => ({ ...current, searchUrl: event.target.value }))} placeholder="https://www.polovniautomobili.com/auto-oglasi/pretraga…" /></Field>
         {editing === 'new' && <label className="check-field"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))} /><span>Enable this profile</span></label>}
         <div className="form-footer"><span className="form-error">{save.isError ? errorMessage(save.error) : ''}</span><button className="button button-primary" disabled={save.isPending}>{save.isPending ? 'Saving…' : 'Save profile'}</button></div>
       </form>

@@ -3,5 +3,7 @@ Description=CarFinder listing scan
 
 [Service]
 Type=oneshot
+TimeoutStartSec=infinity
 Environment=@PATH@
+@CARFINDER_ENV@
 ExecStart=@CARFINDER_EXECUTABLE@ run

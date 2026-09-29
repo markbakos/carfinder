@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 import unicodedata
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from carfinder.providers.base import (
     DiscoveredListing,
@@ -18,6 +18,7 @@ from carfinder.providers.polovniautomobili.fetcher import PlaywrightFetcher, Pro
 from carfinder.providers.polovniautomobili.parser import (
     extract_discovered_listings,
     is_explicitly_empty_search,
+    extract_search_page_count,
     normalize_listing,
     parse_listing,
 )
@@ -73,15 +74,21 @@ class PolovniAutomobiliProvider(ListingProvider):
             raise RuntimeError("Open a provider run before searching")
         urls = [source.search_url] if source.search_url else _native_search_urls(source.native_filters)
         seen: set[str] = set()
-        for url in urls:
-            html = await self._fetcher.get(url)
-            discovered = extract_discovered_listings(html, url)
-            if not discovered and not is_explicitly_empty_search(html):
-                raise ProviderFetchError("Search page had no listing cards and no recognized empty-results message")
-            for listing in discovered:
-                if listing.external_id not in seen:
-                    seen.add(listing.external_id)
-                    yield listing
+        for search_url in urls:
+            page = 1
+            last_page = 1
+            while page <= last_page:
+                url = _search_page_url(search_url, page)
+                html = await self._fetcher.get(url)
+                last_page = max(last_page, extract_search_page_count(html, url))
+                discovered = extract_discovered_listings(html, url)
+                if not discovered and not is_explicitly_empty_search(html):
+                    raise ProviderFetchError("Search page had no listing cards and no recognized empty-results message")
+                for listing in discovered:
+                    if listing.external_id not in seen:
+                        seen.add(listing.external_id)
+                        yield listing
+                page += 1
 
     async def fetch_listing(
         self, discovered: DiscoveredListing, context: RunContext
@@ -126,3 +133,10 @@ def _native_search_urls(filters: dict) -> list[str]:
         query.extend(("model[]", _provider_slug(model)) for model in models)
         urls.append("https://www.polovniautomobili.com/auto-oglasi/pretraga?" + urlencode(query))
     return urls
+
+
+def _search_page_url(search_url: str, page: int) -> str:
+    parsed = urlsplit(search_url)
+    query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key != "page"]
+    query.append(("page", str(page)))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query, doseq=True), ""))

@@ -519,9 +519,15 @@ def systemd_install(
         executable = shutil.which("carfinder") or str(invoked.resolve())
     project_root = Path(__file__).resolve().parents[2]
     template_dir = project_root / "systemd"
+    runtime_environment = "\n".join(
+        f"Environment={_unit_quote(key + '=' + os.environ[key])}"
+        for key in ("CARFINDER_HOME", "CARFINDER_DATABASE_PATH", "CARFINDER_HOST", "CARFINDER_PORT")
+        if os.environ.get(key)
+    )
     replacements = {
         "@CARFINDER_EXECUTABLE@": _unit_quote(executable),
         "@PATH@": _unit_quote(f"PATH={os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}"),
+        "@CARFINDER_ENV@": runtime_environment,
         "@CALENDAR@": calendar.strip().replace("%", "%%"),
         "@RANDOMIZED_DELAY_SECONDS@": str(randomized_delay_seconds),
     }

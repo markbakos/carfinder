@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
@@ -75,6 +75,34 @@ def extract_discovered_listings(html: str, base_url: str) -> list[DiscoveredList
                 provider="polovniautomobili", external_id=external_id, url=url, title=title
             )
     return list(seen.values())
+
+
+def extract_search_page_count(html: str, page_url: str) -> int:
+    """Use the total-result range and linked pages to find the final result page."""
+    current = urlsplit(page_url)
+    highest = 1
+    soup = BeautifulSoup(html, "lxml")
+    for anchor in soup.select("a[href]"):
+        target = urlsplit(urljoin(page_url, str(anchor.get("href", ""))))
+        if target.hostname != current.hostname or target.path != current.path:
+            continue
+        for value in parse_qs(target.query).get("page", []):
+            try:
+                highest = max(highest, int(value))
+            except ValueError:
+                continue
+    text = _norm(soup.get_text(" ", strip=True))
+    displayed = re.search(
+        r"prikazano od ([\d.]+) do ([\d.]+) oglasa od ukupno ([\d.]+)",
+        text,
+    )
+    if displayed:
+        start, end, total = (int(re.sub(r"\D", "", value)) for value in displayed.groups())
+        page_number = int(parse_qs(current.query).get("page", ["1"])[0])
+        page_size = (start - 1) // (page_number - 1) if page_number > 1 else end - start + 1
+        if page_size > 0:
+            highest = max(highest, (total + page_size - 1) // page_size)
+    return highest
 
 
 def is_explicitly_empty_search(html: str) -> bool:

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -99,6 +103,20 @@ class UserStatePatch(BaseModel):
     state: UserStateName
     notes: str = Field(default="", max_length=10000)
     rejection_reason: RejectionReason | None = None
+
+
+class ScheduleInput(BaseModel):
+    calendar: str = Field(default="*-*-* 08,14,20:00:00", min_length=1, max_length=128)
+
+    @field_validator("calendar")
+    @classmethod
+    def single_line_calendar(cls, value: str) -> str:
+        if "\n" in value or "\r" in value:
+            raise ValueError("Schedule must be a single line")
+        value = value.strip()
+        if not value:
+            raise ValueError("Schedule must not be blank")
+        return value
 
 
 def _engine(settings: Settings):
@@ -254,6 +272,58 @@ def _analyze_locked(settings: Settings, listing_id: int, force: bool = False) ->
         return asyncio.run(analyze_stored_listings(settings, listing_id=listing_id, force=force))
 
 
+def _systemd_status() -> dict[str, Any]:
+    systemctl = shutil.which("systemctl")
+    unit_dir = AppPaths.from_environment().config_dir.parent / "systemd" / "user"
+    timer_path = unit_dir / "carfinder.timer"
+    calendar = next((line.partition("=")[2] for line in timer_path.read_text(encoding="utf-8").splitlines() if line.startswith("OnCalendar=")), None) if timer_path.exists() else None
+    if systemctl is None:
+        return {"available": False, "enabled": False, "active": False, "calendar": calendar, "message": "systemctl is not installed"}
+
+    def is_state(state: str) -> bool:
+        try:
+            return subprocess.run(
+                [systemctl, "--user", f"is-{state}", "carfinder.timer"],
+                capture_output=True, text=True, timeout=5, check=False,
+            ).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    return {"available": True, "enabled": is_state("enabled"), "active": is_state("active"), "calendar": calendar, "message": None}
+
+
+def _enable_systemd_timer(calendar: str) -> None:
+    systemctl = shutil.which("systemctl")
+    invoked = Path(sys.argv[0]).expanduser()
+    executable = str(invoked.resolve()) if invoked.name in {"carfinder", "carfinder.exe"} and invoked.is_file() else shutil.which("carfinder")
+    if systemctl is None or executable is None:
+        raise RuntimeError("CarFinder and systemctl must be available in the current environment")
+    install = subprocess.run(
+        [executable, "systemd", "install", "--calendar", calendar],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if install.returncode:
+        raise RuntimeError(install.stderr.strip() or install.stdout.strip() or "Could not generate the systemd timer")
+    for command in (["daemon-reload"], ["enable", "--now", "carfinder.timer"], ["restart", "carfinder.timer"]):
+        result = subprocess.run(
+            [systemctl, "--user", *command], capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Could not enable the systemd timer")
+
+
+def _disable_systemd_timer() -> None:
+    systemctl = shutil.which("systemctl")
+    if systemctl is None:
+        raise RuntimeError("systemctl is not installed")
+    result = subprocess.run(
+        [systemctl, "--user", "disable", "--now", "carfinder.timer"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Could not disable the systemd timer")
+
+
 def create_router(settings: Settings) -> APIRouter:
     api = APIRouter(prefix="/api")
 
@@ -284,6 +354,26 @@ def create_router(settings: Settings) -> APIRouter:
     def providers() -> list[dict[str, Any]]:
         adapter = get_provider("polovniautomobili")
         return [{"id": adapter.provider_id, "capabilities": adapter.capabilities.model_dump()}]
+
+    @api.get("/schedule")
+    def schedule_status() -> dict[str, Any]:
+        return _systemd_status()
+
+    @api.post("/schedule")
+    def enable_schedule(payload: ScheduleInput) -> dict[str, Any]:
+        try:
+            _enable_systemd_timer(payload.calendar)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        return _systemd_status()
+
+    @api.delete("/schedule")
+    def disable_schedule() -> dict[str, Any]:
+        try:
+            _disable_systemd_timer()
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        return _systemd_status()
 
     @api.post("/import", status_code=201)
     def import_listing(payload: ManualListingImport) -> dict[str, Any]:
