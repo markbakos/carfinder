@@ -1,0 +1,7 @@
+[Unit]
+Description=CarFinder listing scan
+
+[Service]
+Type=oneshot
+Environment=@PATH@
+ExecStart=@CARFINDER_EXECUTABLE@ run

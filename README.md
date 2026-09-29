@@ -46,10 +46,25 @@ Market comparisons use active local listings with the same make/model, currency,
 
 The built local UI includes an overview, searchable/filterable listings, listing history and evidence, saved-search editing, side-by-side comparison, run history, and local settings. `carfinder serve` serves the Vite build and its client-side routes; Node is only needed to build or develop the UI. Prices stay in the listing's original currency; CarFinder does not apply exchange-rate conversions.
 
+## Scheduled scans and backups
+
+Generate a systemd user service and timer for the active CarFinder executable:
+
+```sh
+uv run carfinder systemd install
+systemctl --user daemon-reload
+systemctl --user enable --now carfinder.timer
+systemctl --user status carfinder.timer
+systemctl --user list-timers
+journalctl --user -u carfinder.service
+```
+
+The default schedule runs at 08:00, 14:00 and 20:00 with a five-minute randomized delay. Change it with `--calendar`, for example `uv run carfinder systemd install --calendar 'daily 09:30'`. Installation only writes the unit files; enable the timer separately. `carfinder doctor` checks provider reachability and, when enabled, exercises the configured LLM's structured-output path with synthetic data. Create a consistent SQLite backup at any time with `uv run carfinder db backup`; use `--output PATH` to choose its destination.
+
 Runtime data uses XDG paths by default. Set `CARFINDER_HOME=./.data` for a disposable development data/config/state tree; this path is ignored by Git.
 
 ## Project guidance
 
 The private product and implementation context is in ignored `context/`. Start with `AGENTS.md` and `context/README.md`. Third-party source reuse is recorded in `THIRD_PARTY_NOTICES.md`.
 
-Systemd user units and installation instructions are added with the scheduled-operation phase.
+The systemd user timer invokes `carfinder run`; collection continues while the UI is stopped.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CarFinder periodically
+
+[Timer]
+OnCalendar=@CALENDAR@
+RandomizedDelaySec=@RANDOMIZED_DELAY_SECONDS@
+Persistent=true
+Unit=carfinder.service
+
+[Install]
+WantedBy=timers.target

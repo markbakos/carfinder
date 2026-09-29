@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
+import sqlite3
+import subprocess
+import sys
+from contextlib import closing
+from datetime import datetime
 from importlib.util import find_spec
 from pathlib import Path
 
+import httpx
 import typer
 from pydantic import ValidationError
 from sqlalchemy import select, text
@@ -23,12 +30,15 @@ from carfinder.pipeline.runner import run_pipeline
 from carfinder.providers.base import ProviderSearchSource
 from carfinder.providers.registry import get_provider
 from carfinder.search import HardFilters, SoftPreferences, filter_dict, preferences_dict
+from carfinder.llm import ListingAnalysisRequest, get_llm_provider
 
 app = typer.Typer(no_args_is_help=True, help="Local-first used-car discovery and buying intelligence.")
 db_app = typer.Typer(no_args_is_help=True)
 profile_app = typer.Typer(no_args_is_help=True)
+systemd_app = typer.Typer(no_args_is_help=True)
 app.add_typer(db_app, name="db")
 app.add_typer(profile_app, name="profile")
+app.add_typer(systemd_app, name="systemd")
 
 
 @app.callback()
@@ -112,14 +122,33 @@ def doctor() -> None:
             report("Polovni browser profile", "ok", str(settings.browser_profile))
         else:
             report("Polovni browser profile", "warn", f"will be created on first run: {settings.browser_profile}")
-        report("Provider connectivity", "warn", "live check is not part of doctor yet")
+        try:
+            with httpx.Client(timeout=8, follow_redirects=True) as client:
+                response = client.get("https://www.polovniautomobili.com/")
+            state = "ok" if response.status_code < 500 else "warn"
+            report("Provider connectivity", state, f"PolovniAutomobili returned HTTP {response.status_code}")
+        except httpx.HTTPError as error:
+            report("Provider connectivity", "warn", f"{type(error).__name__}; live searches may be unavailable")
     else:
         report("Provider connectivity", "ok", "skipped; no provider enabled")
 
     if settings.llm.enabled:
         executable = settings.llm.command[0] if settings.llm.command else ""
-        if executable and shutil.which(executable):
-            report("LLM command", "ok", executable)
+        resolved = shutil.which(executable) if executable else None
+        if resolved:
+            report("LLM command", "ok", resolved)
+            try:
+                provider = get_llm_provider(
+                    settings.llm.provider, [resolved, *settings.llm.command[1:]],
+                    settings.llm.timeout_seconds, settings.llm.model,
+                )
+                asyncio.run(provider.analyze_listing(ListingAnalysisRequest(listing={
+                    "title": "Synthetic CarFinder doctor check",
+                    "description": "Synthetic input used only to check structured output; no real seller or vehicle.",
+                })))
+                report("LLM structured output", "ok", f"{settings.llm.provider}; schema validated")
+            except Exception as error:
+                report("LLM structured output", "warn", f"{type(error).__name__}; ingestion remains available")
         else:
             report("LLM command", "warn", f"not found: {executable or '(empty command)'}")
     else:
@@ -356,11 +385,101 @@ def db_migrate() -> None:
     typer.echo(f"Database is current: {settings.database_path}")
 
 
+@db_app.command("backup")
+def db_backup(output: Path | None = typer.Option(None, "--output", help="Write the backup to this path.")) -> None:
+    """Create a consistent SQLite backup, including committed WAL data."""
+    settings = _settings_or_exit()
+    source_path = settings.database_path
+    if not source_path.is_file():
+        typer.echo(f"Database does not exist: {source_path}", err=True)
+        raise typer.Exit(1)
+    if output is None:
+        backup_dir = AppPaths.from_environment().backup_dir
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().astimezone().strftime("%Y-%m-%dT%H%M%S")
+        destination = backup_dir / f"carfinder-{timestamp}.sqlite3"
+        suffix = 1
+        while destination.exists():
+            destination = backup_dir / f"carfinder-{timestamp}-{suffix}.sqlite3"
+            suffix += 1
+    else:
+        destination = output.expanduser().resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination == source_path.resolve():
+        typer.echo("Backup destination must differ from the active database", err=True)
+        raise typer.Exit(2)
+    if destination.exists():
+        typer.echo(f"Backup destination already exists: {destination}", err=True)
+        raise typer.Exit(2)
+
+    source_uri = source_path.resolve().as_uri() + "?mode=ro"
+    try:
+        with closing(sqlite3.connect(source_uri, uri=True, timeout=5)) as source, closing(sqlite3.connect(destination)) as target:
+            source.backup(target, pages=256, sleep=0.1)
+            target.commit()
+            integrity = target.execute("PRAGMA integrity_check").fetchone()
+            if not integrity or integrity[0] != "ok":
+                raise sqlite3.DatabaseError("backup integrity check failed")
+    except Exception as error:
+        destination.unlink(missing_ok=True)
+        typer.echo(f"Backup failed: {type(error).__name__}: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Database backup created: {destination}")
+
+
 @db_app.command("path")
 def db_path() -> None:
     """Print the configured SQLite path."""
     settings = _settings_or_exit()
     typer.echo(settings.database_path)
+
+
+def _unit_quote(value: str) -> str:
+    if "\n" in value or "\r" in value:
+        raise ValueError("systemd unit values must be a single line")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+
+
+@systemd_app.command("install")
+def systemd_install(
+    calendar: str = typer.Option("*-*-* 08,14,20:00:00", "--calendar", help="systemd OnCalendar expression."),
+    randomized_delay_seconds: int = typer.Option(300, "--randomized-delay-seconds", min=0, max=86400),
+) -> None:
+    """Generate a user service and timer for the current CarFinder executable."""
+    if not calendar.strip() or "\n" in calendar or "\r" in calendar:
+        typer.echo("Calendar must be a non-empty single line", err=True)
+        raise typer.Exit(2)
+    analyzer = shutil.which("systemd-analyze")
+    if analyzer:
+        try:
+            subprocess.run([analyzer, "calendar", calendar], check=True, capture_output=True, text=True, timeout=5)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else "validation timed out"
+            typer.echo(f"Invalid systemd calendar: {detail}", err=True)
+            raise typer.Exit(2) from error
+
+    executable = shutil.which("carfinder") or str(Path(sys.argv[0]).resolve())
+    project_root = Path(__file__).resolve().parents[2]
+    template_dir = project_root / "systemd"
+    replacements = {
+        "@CARFINDER_EXECUTABLE@": _unit_quote(executable),
+        "@PATH@": _unit_quote(f"PATH={os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}"),
+        "@CALENDAR@": calendar.strip().replace("%", "%%"),
+        "@RANDOMIZED_DELAY_SECONDS@": str(randomized_delay_seconds),
+    }
+    unit_dir = AppPaths.from_environment().config_dir.parent / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("carfinder.service", "carfinder.timer"):
+        template = template_dir / f"{name}.in"
+        content = template.read_text(encoding="utf-8")
+        for token, value in replacements.items():
+            content = content.replace(token, value)
+        destination = unit_dir / name
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(destination)
+    typer.echo(f"Generated user units in {unit_dir}")
+    typer.echo("Enable the schedule with: systemctl --user daemon-reload && systemctl --user enable --now carfinder.timer")
 
 
 if __name__ == "__main__":
