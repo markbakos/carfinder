@@ -41,8 +41,8 @@ export default function ListingsPage() {
   const pageCount = Math.max(1, Math.ceil((listings.data?.total ?? 0) / pageSize))
   const selected = useMemo(() => [...selectedIds], [selectedIds])
   const vehicleRows = filterOptions.data?.vehicles ?? []
-  const selectedMakes = new Set((draft.make as string[]).map((value) => value.toLocaleLowerCase()))
-  const selectedModels = new Set((draft.model as string[]).map((value) => value.toLocaleLowerCase()))
+  const selectedMakes = new Set(values('make').map((value) => value.toLocaleLowerCase()))
+  const selectedModels = new Set(values('model').map((value) => value.toLocaleLowerCase()))
   const options: Record<string, string[]> = {
     make: uniqueSorted([...commonMakes, ...vehicleRows.map((row) => row.make)]),
     model: uniqueSorted(vehicleRows.filter((row) => !selectedMakes.size || (row.make && selectedMakes.has(row.make.toLocaleLowerCase()))).map((row) => row.model)),
@@ -131,7 +131,7 @@ export default function ListingsPage() {
         <Field label="Provider"><select value={text('provider')} onChange={(event) => handleChange('provider', event.target.value)}><option value="">All providers</option><option value="polovniautomobili">PolovniAutomobili</option><option value="manual_import">Manual import</option></select></Field>
         <label className="check-field"><input type="checkbox" checked={text('price_drop') === 'true'} onChange={(event) => handleChange('price_drop', event.target.checked ? 'true' : '')} /><span>Price dropped</span></label>
       </div>
-      <div className="filter-actions"><button className="button button-primary" type="submit">Apply filters</button><button className="button button-quiet" type="button" onClick={() => { setDraft({ sort: 'newest' }); setParams({ sort: 'newest' }) }}>Clear</button><span className="results-count">{listings.data ? `${listings.data.total.toLocaleString('sr-RS')} results` : ' '}</span></div>
+      <div className="filter-actions"><button className="button button-primary" type="submit">Apply filters</button><button className="button button-quiet" type="button" onClick={() => { setDraft(draftFromParams(new URLSearchParams('sort=newest'))); setParams({ sort: 'newest' }) }}>Clear</button><span className="results-count">{listings.data ? `${listings.data.total.toLocaleString('sr-RS')} results` : ' '}</span></div>
     </form>
 
     {listings.isError && <ErrorNotice error={listings.error} />}
