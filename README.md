@@ -24,14 +24,16 @@ Create a native-filter profile, or import a search URL copied from PolovniAutomo
 
 ```sh
 uv run carfinder profile create "Golf 5 Diesel" \
+  --initial-import-mode analyze_all \
   --filters-json '{"makes":["Volkswagen"],"models":["Golf"],"generations":["Golf V"],"fuel":["diesel"],"year":{"min":2004,"max":2009},"price":{"max":5500},"mileage_km":{"max":250000}}'
 uv run carfinder profile create "Advanced Polovni search" \
   --search-url 'https://www.polovniautomobili.com/auto-oglasi/pretraga?...'
 uv run carfinder profile list
 uv run carfinder run --profile "Golf 5 Diesel"
+uv run carfinder analyze
 ```
 
-The profile starts in `seed_only` mode so the first scan can build a local baseline. Change it to `analyze_all` when creating a narrow profile if you want first-pass analysis. The Polovni browser uses a persistent profile under local app data and request delays default to 2.5 seconds. If the site presents a verification page, the run records the failure and stops; it does not solve or bypass the challenge.
+The profile defaults to `seed_only`: deterministic findings are stored on the first scan, while optional LLM analysis is deferred. `analyze_all` runs it for every first-pass result; `analyze_top_n` limits first-pass LLM calls. Later scans process pending analysis. Deterministic analysis always runs without an LLM. To enable the Codex Exec adapter, set `[llm] enabled = true`; `carfinder analyze --force` bypasses the semantic cache. The Polovni browser uses a persistent profile under local app data and request delays default to 2.5 seconds. If the site presents a verification page, the run records the failure and stops; it does not solve or bypass the challenge.
 
 `carfinder run` only writes to SQLite and works while the API/UI is stopped. The UI is optional; retained descriptions redact phone numbers and email addresses.
 

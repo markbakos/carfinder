@@ -1,0 +1,269 @@
+{
+  "$defs": {
+    "AnalysisConcern": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence": {
+          "title": "Evidence",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "summary",
+        "evidence",
+        "confidence",
+        "severity"
+      ],
+      "title": "AnalysisConcern",
+      "type": "object"
+    },
+    "AnalysisFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence": {
+          "title": "Evidence",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "category",
+        "summary",
+        "evidence",
+        "confidence"
+      ],
+      "title": "AnalysisFinding",
+      "type": "object"
+    },
+    "ExtractedClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_type": {
+          "title": "Claim Type",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        },
+        "evidence": {
+          "title": "Evidence",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "claim_type",
+        "value",
+        "evidence",
+        "confidence"
+      ],
+      "title": "ExtractedClaim",
+      "type": "object"
+    },
+    "MissingInformation": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "importance": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Importance",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "importance",
+        "reason"
+      ],
+      "title": "MissingInformation",
+      "type": "object"
+    },
+    "RiskSignal": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence": {
+          "title": "Evidence",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "summary",
+        "evidence",
+        "confidence",
+        "severity"
+      ],
+      "title": "RiskSignal",
+      "type": "object"
+    },
+    "SellerQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "priority": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Priority",
+          "type": "string"
+        },
+        "question": {
+          "title": "Question",
+          "type": "string"
+        }
+      },
+      "required": [
+        "priority",
+        "question"
+      ],
+      "title": "SellerQuestion",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "positive_claims": {
+      "items": {
+        "$ref": "#/$defs/AnalysisFinding"
+      },
+      "title": "Positive Claims",
+      "type": "array"
+    },
+    "concerns": {
+      "items": {
+        "$ref": "#/$defs/AnalysisConcern"
+      },
+      "title": "Concerns",
+      "type": "array"
+    },
+    "missing_information": {
+      "items": {
+        "$ref": "#/$defs/MissingInformation"
+      },
+      "title": "Missing Information",
+      "type": "array"
+    },
+    "questions_to_ask": {
+      "items": {
+        "$ref": "#/$defs/SellerQuestion"
+      },
+      "title": "Questions To Ask",
+      "type": "array"
+    },
+    "extracted_claims": {
+      "items": {
+        "$ref": "#/$defs/ExtractedClaim"
+      },
+      "title": "Extracted Claims",
+      "type": "array"
+    },
+    "risk_signals": {
+      "items": {
+        "$ref": "#/$defs/RiskSignal"
+      },
+      "title": "Risk Signals",
+      "type": "array"
+    }
+  },
+  "required": [
+    "positive_claims",
+    "concerns",
+    "missing_information",
+    "questions_to_ask",
+    "extracted_claims",
+    "risk_signals"
+  ],
+  "title": "ListingAnalysisResult",
+  "type": "object"
+}

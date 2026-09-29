@@ -17,6 +17,7 @@ from carfinder.db.migrations import migration_status, upgrade_database
 from carfinder.db.models import ProviderSource, SearchProfile
 from carfinder.logging_config import configure_logging
 from carfinder.paths import AppPaths
+from carfinder.analysis_service import analyze_stored_listings
 from carfinder.pipeline.lock import RunAlreadyActive, run_lock
 from carfinder.pipeline.runner import run_pipeline
 from carfinder.providers.base import ProviderSearchSource
@@ -158,6 +159,7 @@ def _run_pipeline_command(profile: str | None, provider: str | None) -> None:
     typer.echo(f"Price drops: {summary.price_drops}")
     typer.echo(f"Removed listings: {summary.listings_removed}")
     typer.echo(f"Detail requests: {summary.detail_requests}")
+    typer.echo(f"LLM calls: {summary.llm_calls}; cache hits: {summary.llm_cache_hits}")
     typer.echo(f"Warnings: {summary.warning_count}; errors: {summary.error_count}")
     if summary.status == "failed":
         raise typer.Exit(1)
@@ -179,6 +181,29 @@ def scrape(
 ) -> None:
     """Alias for run, useful for scripts that call the collection step scrape."""
     _run_pipeline_command(profile, provider)
+
+
+@app.command()
+def analyze(
+    listing_id: int | None = typer.Option(None, "--listing", help="Analyze one stored listing."),
+    force: bool = typer.Option(False, "--force", help="Re-run the configured LLM, bypassing its cache."),
+) -> None:
+    """Analyze stored listing snapshots without contacting providers."""
+    settings = _settings_or_exit()
+    paths = AppPaths.from_environment()
+    try:
+        with run_lock(paths.lock_file):
+            result = asyncio.run(analyze_stored_listings(settings, listing_id=listing_id, force=force))
+    except RunAlreadyActive:
+        typer.echo("run already active")
+        return
+    except LookupError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Analysis run #{result['run_id']}: {result['status']}")
+    typer.echo(f"Listings analyzed: {result['listings_analyzed']}")
+    typer.echo(f"LLM calls: {result['llm_calls']}; cache hits: {result['llm_cache_hits']}")
+    typer.echo(f"Warnings: {result['warning_count']}")
 
 
 @app.command()

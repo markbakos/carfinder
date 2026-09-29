@@ -13,6 +13,7 @@ from carfinder.config import Settings
 from carfinder.db.engine import create_database_engine
 from carfinder.db.models import (
     Listing,
+    ListingAnalysis,
     ListingEvent,
     ListingSnapshot,
     ProviderSource,
@@ -213,6 +214,38 @@ def test_one_listing_is_shared_and_only_matches_profiles_that_pass_filters(monke
         matches = session.scalars(select(runner.ProfileListingMatch).order_by(runner.ProfileListingMatch.profile_id)).all()
         assert len(matches) == 2
         assert [item.hard_filter_pass for item in matches] == [False, True]
+    engine.dispose()
+
+
+def test_llm_failure_does_not_abort_listing_ingestion(monkeypatch, tmp_path: Path) -> None:
+    _settings, database = _initialize(monkeypatch, tmp_path)
+    engine = create_database_engine(database)
+    with Session(engine) as session:
+        profile = session.scalar(select(SearchProfile).where(SearchProfile.name == "Golf V"))
+        assert profile is not None
+        profile.initial_import_mode = "analyze_all"
+        session.commit()
+    engine.dispose()
+    settings = Settings.model_validate({
+        "database": {"path": str(database)},
+        "llm": {"enabled": True, "provider": "codex_exec", "command": ["missing-codex"]},
+    })
+    provider = FakeProvider()
+    monkeypatch.setattr(runner, "get_provider", lambda _provider_id: provider)
+    import carfinder.analysis_service as service
+    def missing_llm(*_args):
+        raise RuntimeError("not installed")
+    monkeypatch.setattr(service, "get_llm_provider", missing_llm)
+
+    summary = asyncio.run(runner.run_pipeline(settings, profile_name="Golf V"))
+    assert summary.status == "partial"
+    assert summary.listings_new == 1 and summary.detail_requests == 1
+    assert summary.llm_calls == 1 and summary.warning_count == 1 and summary.error_count == 0
+    engine = create_database_engine(database)
+    with Session(engine) as session:
+        assert session.scalar(select(func.count()).select_from(Listing)) == 1
+        analysis = session.scalar(select(ListingAnalysis))
+        assert analysis is not None and analysis.status == "partial"
     engine.dispose()
 
 

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from carfinder.config import Settings
+from carfinder.analysis_service import analyze_snapshot
 from carfinder.db.engine import create_database_engine
 from carfinder.db.models import (
     Listing,
@@ -41,6 +42,8 @@ class RunSummary:
     price_drops: int
     listings_removed: int
     detail_requests: int
+    llm_calls: int
+    llm_cache_hits: int
     warning_count: int
     error_count: int
 
@@ -182,6 +185,24 @@ def _update_profile_match(
         match.last_matched_at = _utcnow()
 
 
+async def _analyze_safely(
+    session: Session,
+    run: ScrapeRun,
+    listing: Listing,
+    snapshot: ListingSnapshot,
+    settings: Settings,
+    allow_llm: bool,
+) -> None:
+    try:
+        await analyze_snapshot(session, run, listing, snapshot, settings, allow_llm=allow_llm)
+    except Exception as error:
+        _message(
+            session, run, "warning", "listing_analysis_failed",
+            f"Listing analysis failed: {type(error).__name__}",
+            {"listing_id": listing.id, "snapshot_id": snapshot.id},
+        )
+
+
 async def _store_listing(
     session: Session,
     run: ScrapeRun,
@@ -190,7 +211,8 @@ async def _store_listing(
     discovered: DiscoveredListing,
     provider,
     context: RunContext,
-    detail_recheck_hours: int,
+    settings: Settings,
+    allow_llm: bool,
 ) -> None:
     now = _utcnow()
     listing = session.scalar(
@@ -233,12 +255,13 @@ async def _store_listing(
     should_fetch = (
         created
         or listing.last_detail_fetch_at is None
-        or listing.last_detail_fetch_at <= now - timedelta(hours=detail_recheck_hours)
+        or listing.last_detail_fetch_at <= now - timedelta(hours=settings.scraping.detail_recheck_hours)
     )
     run.listings_seen += 1
     if not should_fetch:
         if session_listing is not None:
             _update_profile_match(session, profile, source, listing, session_listing)
+            await _analyze_safely(session, run, listing, session_listing, settings, allow_llm)
         return
 
     run.detail_requests += 1
@@ -263,6 +286,7 @@ async def _store_listing(
     digest = _content_hash(normalized_detail)
     if session_listing is not None and session_listing.content_hash == digest:
         _update_profile_match(session, profile, source, listing, session_listing)
+        await _analyze_safely(session, run, listing, session_listing, settings, allow_llm)
         return
 
     previous = session_listing
@@ -271,6 +295,7 @@ async def _store_listing(
     session.flush()
     listing.current_snapshot_id = snapshot.id
     _update_profile_match(session, profile, source, listing, snapshot)
+    await _analyze_safely(session, run, listing, snapshot, settings, allow_llm)
     if previous is None:
         return
 
@@ -341,7 +366,9 @@ async def _process_source(
 
     seen_ids: set[int] = set()
     identity_error = False
-    for discovered in discovered_listings:
+    first_scan = not source.first_scan_completed
+    top_n = int((source.source_settings_json or {}).get("analyze_top_n", 25))
+    for index, discovered in enumerate(discovered_listings):
         if discovered.provider != source.provider or not discovered.external_id.strip():
             _message(session, run, "error", "invalid_listing_identity", "Provider returned a listing with an invalid identity", {"source_id": source.id})
             identity_error = True
@@ -352,7 +379,9 @@ async def _process_source(
         if listing is not None:
             seen_ids.add(listing.id)
         await _store_listing(
-            session, run, profile, source, discovered, provider, context, settings.scraping.detail_recheck_hours
+            session, run, profile, source, discovered, provider, context, settings,
+            allow_llm=(not first_scan or profile.initial_import_mode == "analyze_all"
+                       or (profile.initial_import_mode == "analyze_top_n" and index < top_n)),
         )
         if listing is None:
             listing = session.scalar(
@@ -468,7 +497,8 @@ async def run_pipeline(
                             except Exception as error:
                                 _message(session, run, "warning", "provider_close_failed", f"Provider shutdown warning: {type(error).__name__}: {error}")
             if run.status == "running":
-                run.status = "failed" if run.error_count and not run.sources_processed else "partial" if run.error_count else "success"
+                has_warnings = run.warning_count > 0 or run.error_count > 0
+                run.status = "failed" if run.error_count and not run.sources_processed else "partial" if has_warnings else "success"
             run.finished_at = _utcnow()
             session.commit()
             result = _summary(run)
@@ -503,6 +533,8 @@ def _summary(run: ScrapeRun) -> RunSummary:
         price_drops=run.price_drops,
         listings_removed=run.listings_removed,
         detail_requests=run.detail_requests,
+        llm_calls=run.llm_calls,
+        llm_cache_hits=run.llm_cache_hits,
         warning_count=run.warning_count,
         error_count=run.error_count,
     )

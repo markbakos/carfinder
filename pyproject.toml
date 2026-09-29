@@ -34,7 +34,7 @@ package-dir = {"" = "backend"}
 where = ["backend"]
 
 [tool.setuptools.package-data]
-carfinder = ["alembic.ini", "migrations/*.mako"]
+carfinder = ["alembic.ini", "migrations/*.mako", "prompts/*.md", "schemas/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -164,6 +164,53 @@ class ListingUserState(Base):
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     rejection_reason: Mapped[str | None] = mapped_column(String(32))
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+
+
+class ListingAnalysis(Base):
+    __tablename__ = "listing_analysis"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", name="uq_analysis_snapshot"),
+        Index("ix_analysis_listing_created", "listing_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), nullable=False)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("listing_snapshots.id", ondelete="CASCADE"), nullable=False)
+    semantic_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    result_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    llm_provider: Mapped[str | None] = mapped_column(String(48))
+    llm_model: Mapped[str | None] = mapped_column(String(120))
+    prompt_version: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp())
+
+
+class ListingClaim(Base):
+    __tablename__ = "listing_claims"
+    __table_args__ = (Index("ix_claims_listing_snapshot", "listing_id", "snapshot_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), nullable=False)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("listing_snapshots.id", ondelete="CASCADE"), nullable=False)
+    claim_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    value_json: Mapped[object] = mapped_column(JSON, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    verification_status: Mapped[str] = mapped_column(String(24), nullable=False, default="claimed", server_default="claimed")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp())
+
+
+class LlmCache(Base):
+    __tablename__ = "llm_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(48), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    knowledge_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp())
 
 
 class ScrapeRunMessage(Base):

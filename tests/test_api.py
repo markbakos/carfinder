@@ -79,6 +79,14 @@ def test_profile_listing_history_and_user_state_api(monkeypatch, tmp_path) -> No
             assert state.json()["state"] == "watching"
             assert state.json()["notes"] == "Ask for service invoices"
             assert (await client.get("/api/listings", params={"user_state": "watching"})).json()["total"] == 1
+            analysis_run = await client.post(f"/api/listings/{listing_id}/reanalyze")
+            assert analysis_run.status_code == 200, analysis_run.text
+            assert analysis_run.json()["listings_analyzed"] == 1
+            analysis = await client.get(f"/api/listings/{listing_id}/analysis")
+            assert analysis.json()["status"] == "complete"
+            assert any(item["field"] == "vin" for item in analysis.json()["result"]["missing_information"])
             assert (await client.get("/api/stats")).json()["listings_total"] == 1
+            runs = await client.get("/api/runs")
+            assert any(item["trigger"] == "analyze" for item in runs.json()["items"])
 
     asyncio.run(exercise())

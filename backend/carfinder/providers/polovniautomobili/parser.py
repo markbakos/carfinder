@@ -6,13 +6,12 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
+from carfinder.privacy import redact_contact_details
 from carfinder.providers.base import DiscoveredListing, NormalizedListing, RawListing
 
 _AD_PATH = re.compile(r"^/auto-oglasi/(?P<id>\d+)(?:/[^/]+)?/?$")
 _NUMBER = re.compile(r"(?<!\d)(\d{1,3}(?:[.\s]\d{3})+|\d{3,7})(?!\d)")
 _YEAR = re.compile(r"\b((?:19|20)\d{2})\b")
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-_PHONE = re.compile(r"(?<![\w+])(?:(?:\+|00)381[\s/.-]*(?:\(0\)[\s/.-]*)?|0)\d(?:[\s/.-]?\d){6,10}(?!\w)")
 _DIACRITICS = str.maketrans({"č": "c", "ć": "c", "š": "s", "ž": "z", "đ": "dj"})
 _CURRENCY_MARKERS = {
     "€": "EUR",
@@ -140,17 +139,6 @@ def _description(soup: BeautifulSoup) -> str:
     return node.get_text(" ", strip=True) if node else ""
 
 
-def _redact_contacts(value: str) -> str:
-    value = _EMAIL.sub("[email]", value)
-
-    def redact(match: re.Match[str]) -> str:
-        raw = match.group(0)
-        digits = sum(character.isdigit() for character in raw)
-        return "[phone]" if digits >= 9 else raw
-
-    return _PHONE.sub(redact, value)
-
-
 def _price(soup: BeautifulSoup, structured: list[dict[str, object]]) -> str | None:
     for selector in ('[class*="FormattedPrice"]', '[data-testid*="price"]', 'meta[property="product:price:amount"]'):
         node = soup.select_one(selector)
@@ -215,7 +203,7 @@ def parse_listing(html: str, url: str, external_id: str) -> RawListing:
     # Remove executable and non-visible content before storing provider-derived text.
     for node in soup(["script", "style", "noscript"]):
         node.decompose()
-    description = _redact_contacts(_description(soup))
+    description = redact_contact_details(_description(soup))
     if not description and not soup.select_one('h2, h3'):
         description = ""
 
@@ -231,7 +219,7 @@ def parse_listing(html: str, url: str, external_id: str) -> RawListing:
         provider="polovniautomobili",
         external_id=external_id,
         url=url,
-        title=_redact_contacts(title or "") or None,
+        title=redact_contact_details(title or "") or None,
         description=description,
         asking_price_raw=price_raw,
         fields=fields,

@@ -14,6 +14,8 @@ from carfinder.config import Settings
 from carfinder.db.engine import create_database_engine
 from carfinder.db.models import (
     Listing,
+    ListingAnalysis,
+    ListingClaim,
     ListingEvent,
     ListingSnapshot,
     ListingUserState,
@@ -26,6 +28,7 @@ from carfinder.db.models import (
 from carfinder.paths import AppPaths
 from carfinder.pipeline.lock import RunAlreadyActive, run_lock
 from carfinder.pipeline.runner import run_pipeline
+from carfinder.analysis_service import analyze_stored_listings
 from carfinder.providers.base import ProviderSearchSource
 from carfinder.providers.registry import get_provider
 from carfinder.search import HardFilters, filter_dict
@@ -198,6 +201,11 @@ def _run_locked(settings: Settings, profile_name: str | None = None) -> dict[str
     with run_lock(AppPaths.from_environment().lock_file):
         result = asyncio.run(run_pipeline(settings, profile_name=profile_name, trigger="api"))
     return result.__dict__
+
+
+def _analyze_locked(settings: Settings, listing_id: int, force: bool = False) -> dict[str, int | str]:
+    with run_lock(AppPaths.from_environment().lock_file):
+        return asyncio.run(analyze_stored_listings(settings, listing_id=listing_id, force=force))
 
 
 def create_router(settings: Settings) -> APIRouter:
@@ -437,6 +445,45 @@ def create_router(settings: Settings) -> APIRouter:
                 }
         finally:
             engine.dispose()
+
+    @api.get("/listings/{listing_id}/analysis")
+    def listing_analysis(listing_id: int) -> dict[str, Any]:
+        engine = _engine(settings)
+        try:
+            with Session(engine) as session:
+                listing = session.get(Listing, listing_id)
+                if listing is None:
+                    raise HTTPException(status_code=404, detail="Listing not found")
+                snapshot = session.get(ListingSnapshot, listing.current_snapshot_id) if listing.current_snapshot_id else None
+                analysis = session.scalar(select(ListingAnalysis).where(
+                    ListingAnalysis.listing_id == listing_id,
+                    ListingAnalysis.snapshot_id == snapshot.id,
+                )) if snapshot else None
+                claims = session.scalars(select(ListingClaim).where(
+                    ListingClaim.listing_id == listing_id,
+                    ListingClaim.snapshot_id == snapshot.id,
+                ).order_by(ListingClaim.id)) if snapshot else []
+                return {
+                    "status": analysis.status if analysis else "pending",
+                    "snapshot_id": snapshot.id if snapshot else None,
+                    "result": analysis.result_json if analysis else None,
+                    "claims": [{
+                        "id": claim.id, "type": claim.claim_type, "value": claim.value_json,
+                        "source_type": claim.source_type, "source_text": claim.source_text,
+                        "verification_status": claim.verification_status, "confidence": claim.confidence,
+                    } for claim in claims],
+                }
+        finally:
+            engine.dispose()
+
+    @api.post("/listings/{listing_id}/reanalyze")
+    async def reanalyze_listing(listing_id: int) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(_analyze_locked, settings, listing_id, True)
+        except RunAlreadyActive as error:
+            raise HTTPException(status_code=409, detail="run already active") from error
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
 
     @api.get("/listings/{listing_id}/matches")
     def listing_matches(listing_id: int) -> list[dict[str, Any]]:
