@@ -255,6 +255,29 @@ def _analyze_locked(settings: Settings, listing_id: int, force: bool = False) ->
 def create_router(settings: Settings) -> APIRouter:
     api = APIRouter(prefix="/api")
 
+    @api.get("/settings")
+    def settings_summary() -> dict[str, Any]:
+        paths = AppPaths.from_environment()
+        return {
+            "config_path": str(settings.config_path or paths.config_file),
+            "database_path": str(settings.database_path),
+            "server": settings.server.model_dump(),
+            "scraping": settings.scraping.model_dump(),
+            "provider": {
+                "id": "polovniautomobili",
+                "enabled": settings.providers.polovniautomobili.enabled,
+                "headless": settings.providers.polovniautomobili.headless,
+                "browser_profile": str(settings.browser_profile),
+            },
+            "llm": {
+                "enabled": settings.llm.enabled,
+                "provider": settings.llm.provider,
+                "model": settings.llm.model,
+                "timeout_seconds": settings.llm.timeout_seconds,
+            },
+            "image_mode": settings.storage.images.mode,
+        }
+
     @api.get("/providers")
     def providers() -> list[dict[str, Any]]:
         adapter = get_provider("polovniautomobili")
@@ -388,7 +411,7 @@ def create_router(settings: Settings) -> APIRouter:
         new_since: datetime | None = None,
         price_drop: bool = False,
         q: str | None = None,
-        sort: Literal["newest", "price_asc", "price_desc", "quality_desc", "rank_desc", "first_seen"] = "newest",
+        sort: Literal["newest", "changed", "price_asc", "price_desc", "quality_desc", "rank_desc", "first_seen"] = "newest",
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
@@ -449,6 +472,7 @@ def create_router(settings: Settings) -> APIRouter:
                 total = session.scalar(count_stmt) or 0
                 ordering = {
                     "newest": Listing.first_seen_at.desc(),
+                    "changed": ListingSnapshot.observed_at.desc().nullslast(),
                     "first_seen": Listing.first_seen_at.asc(),
                     "price_asc": ListingSnapshot.price_amount.asc().nullslast(),
                     "price_desc": ListingSnapshot.price_amount.desc().nullslast(),

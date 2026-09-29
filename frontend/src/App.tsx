@@ -1,55 +1,55 @@
-import { useQuery } from '@tanstack/react-query'
-import { Route, Routes } from 'react-router'
+import { NavLink, Outlet, Route, Routes } from 'react-router'
+import Dashboard from './pages/Dashboard'
+import ListingsPage from './pages/ListingsPage'
+import ListingDetailPage from './pages/ListingDetailPage'
+import ProfilesPage from './pages/ProfilesPage'
+import ComparePage from './pages/ComparePage'
+import RunsPage from './pages/RunsPage'
+import SettingsPage from './pages/SettingsPage'
 
-type Health = {
-  status: 'ok'
-  database: 'ok'
-  migration: { current: string; head: string }
-}
+const navigation = [
+  { to: '/', label: 'Overview', end: true },
+  { to: '/listings', label: 'Listings' },
+  { to: '/profiles', label: 'Search profiles' },
+  { to: '/runs', label: 'Runs' },
+]
 
-async function getHealth(): Promise<Health> {
-  const response = await fetch('/api/health')
-  if (!response.ok) throw new Error(`Local API returned ${response.status}`)
-  return response.json() as Promise<Health>
-}
-
-function Dashboard() {
-  const health = useQuery({ queryKey: ['health'], queryFn: getHealth, retry: false })
-
-  return (
-    <main className="page-shell">
-      <header className="topbar">
-        <a className="wordmark" href="/" aria-label="CarFinder home">CarFinder</a>
-        <span className="local-label">LOCAL DATABASE</span>
-      </header>
-
-      <section className="welcome" aria-labelledby="welcome-title">
-        <p className="eyebrow">USED-CAR INTELLIGENCE</p>
-        <h1 id="welcome-title">Your search starts here.</h1>
-        <p className="lede">CarFinder keeps the listings you find, tracks how they change, and helps you compare the evidence.</p>
-        <div className="status-line" role="status" aria-live="polite">
-          <span className={`status-dot ${health.isSuccess ? 'is-ready' : ''}`} />
-          {health.isLoading && 'Checking the local database…'}
-          {health.isSuccess && `Database ready · migration ${health.data.migration.current}`}
-          {health.isError && 'Local API is unavailable or needs initialization.'}
-        </div>
-      </section>
-
-      <section className="empty-state" aria-labelledby="empty-title">
-        <span className="empty-mark" aria-hidden="true">⌕</span>
-        <h2 id="empty-title">No listings yet</h2>
-        <p>Initialize CarFinder, then add a PolovniAutomobili search profile to begin building your local market history.</p>
-        <code>carfinder init</code>
-      </section>
-      <footer>Runs locally · Your database stays on this machine</footer>
-    </main>
-  )
+function AppShell() {
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <NavLink className="brand" to="/" aria-label="CarFinder overview"><span className="brand-mark" aria-hidden="true">C</span><span>CarFinder<small>LOCAL MARKET INTELLIGENCE</small></span></NavLink>
+      <nav className="primary-nav" aria-label="Main navigation">
+        <span className="nav-caption">WORKSPACE</span>
+        {navigation.map((item) => <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `nav-link ${isActive ? 'is-active' : ''}`}>
+          <span className="nav-symbol" aria-hidden="true">{item.to === '/' ? '⌂' : item.to === '/listings' ? '▤' : item.to === '/profiles' ? '⌕' : '◷'}</span>{item.label}
+        </NavLink>)}
+        <NavLink to="/compare" className={({ isActive }) => `nav-link ${isActive ? 'is-active' : ''}`}><span className="nav-symbol" aria-hidden="true">⇄</span>Compare</NavLink>
+      </nav>
+      <div className="sidebar-bottom">
+        <div className="local-card"><span className="local-led" /><span><strong>Private workspace</strong><small>Stored on this device</small></span></div>
+        <NavLink to="/settings" className={({ isActive }) => `nav-link nav-settings ${isActive ? 'is-active' : ''}`}><span className="nav-symbol" aria-hidden="true">⚙</span>Settings</NavLink>
+      </div>
+    </aside>
+    <div className="app-main">
+      <header className="mobile-topbar"><NavLink className="brand" to="/" aria-label="CarFinder overview"><span className="brand-mark" aria-hidden="true">C</span><span>CarFinder</span></NavLink><span className="local-label"><span className="local-led" /> LOCAL ONLY</span></header>
+      <Outlet />
+    </div>
+  </div>
 }
 
 function NotFound() {
-  return <main className="page-shell"><h1>Page not found</h1><a href="/">Return to CarFinder</a></main>
+  return <main className="content"><div className="not-found"><p className="eyebrow">404 · NOT FOUND</p><h1>This page isn't here.</h1><NavLink className="button button-primary" to="/">Back to overview</NavLink></div></main>
 }
 
 export default function App() {
-  return <Routes><Route path="/" element={<Dashboard />} /><Route path="*" element={<NotFound />} /></Routes>
+  return <Routes><Route element={<AppShell />}>
+    <Route index element={<Dashboard />} />
+    <Route path="listings" element={<ListingsPage />} />
+    <Route path="listings/:listingId" element={<ListingDetailPage />} />
+    <Route path="profiles" element={<ProfilesPage />} />
+    <Route path="compare" element={<ComparePage />} />
+    <Route path="runs" element={<RunsPage />} />
+    <Route path="settings" element={<SettingsPage />} />
+    <Route path="*" element={<NotFound />} />
+  </Route></Routes>
 }

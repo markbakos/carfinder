@@ -27,6 +27,10 @@ def test_profile_listing_history_and_user_state_api(monkeypatch, tmp_path) -> No
 
     async def exercise() -> None:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            settings_response = await client.get("/api/settings")
+            assert settings_response.status_code == 200
+            assert settings_response.json()["database_path"].endswith("carfinder.sqlite3")
+            assert "command" not in settings_response.json()["llm"]
             created = await client.post("/api/profiles", json={
                 "name": "Golf V diesel",
                 "filters": {"makes": ["Volkswagen"], "models": ["Golf"], "fuel": ["diesel"]},
@@ -74,6 +78,8 @@ def test_profile_listing_history_and_user_state_api(monkeypatch, tmp_path) -> No
             assert filtered.json()["total"] == 1
             ranked = await client.get("/api/listings", params={"profile": profile["id"], "sort": "rank_desc"})
             assert ranked.json()["total"] == 1
+            changed = await client.get("/api/listings", params={"sort": "changed"})
+            assert changed.json()["items"][0]["id"] == listing_id
             assert (await client.get("/api/listings", params={"minimum_score": 0})).json()["total"] == 0
             history = await client.get(f"/api/listings/{listing_id}/history")
             assert len(history.json()["snapshots"]) == 1

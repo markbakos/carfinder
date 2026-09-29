@@ -44,6 +44,8 @@ The local API exposes saved profiles, filtered listings, listing history/matches
 
 Market comparisons use active local listings with the same make/model, currency, year within two years, fuel and transmission family. Generation, engine size and mileage are preferred, with any relaxation recorded in the explanation. Values use a robust median/outlier filter; fewer than three retained comparables produces no estimated median, and confidence is based on sample count. Quality dimensions are evidence-based and unsupported dimensions remain unscored. Profile fit is reported separately from quality; rank combines them 70/30 when both scores are available. `/api/listings` supports `minimum_score`, `sort=quality_desc`, and profile-scoped `sort=rank_desc`.
 
+The built local UI includes an overview, searchable/filterable listings, listing history and evidence, saved-search editing, side-by-side comparison, run history, and local settings. `carfinder serve` serves the Vite build and its client-side routes; Node is only needed to build or develop the UI. Prices stay in the listing's original currency; CarFinder does not apply exchange-rate conversions.
+
 Runtime data uses XDG paths by default. Set `CARFINDER_HOME=./.data` for a disposable development data/config/state tree; this path is ignored by Git.
 
 ## Project guidance

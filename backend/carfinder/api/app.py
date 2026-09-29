@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -37,7 +37,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     frontend_dist = Path(__file__).resolve().parents[3] / "frontend" / "dist"
     if (frontend_dist / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+        app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="frontend-assets")
+
+        @app.get("/{frontend_path:path}", include_in_schema=False)
+        def frontend_route(frontend_path: str) -> FileResponse:
+            if frontend_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="Not found")
+            target = (frontend_dist / frontend_path).resolve()
+            if target != frontend_dist and frontend_dist not in target.parents:
+                raise HTTPException(status_code=404, detail="Not found")
+            if target.is_file():
+                return FileResponse(target)
+            return FileResponse(frontend_dist / "index.html")
     else:
         @app.get("/", response_class=HTMLResponse, include_in_schema=False)
         def frontend_not_built() -> str:
