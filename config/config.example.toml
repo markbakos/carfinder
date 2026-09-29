@@ -1,0 +1,27 @@
+[database]
+# Defaults to the XDG data path, or $CARFINDER_HOME/data/carfinder.sqlite3.
+# Set path to override the database location.
+
+[scraping]
+detail_recheck_hours = 24
+removed_after_missing_runs = 3
+request_delay_seconds = 2.5
+max_concurrent_detail_requests = 1
+
+[providers.polovniautomobili]
+enabled = false
+headless = true
+# Defaults to the app data directory's browser/polovni profile.
+
+[llm]
+enabled = false
+provider = "codex_exec"
+model = ""
+timeout_seconds = 180
+
+[storage.images]
+mode = "none"
+
+[server]
+host = "127.0.0.1"
+port = 8420

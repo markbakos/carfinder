@@ -1,2 +1,16 @@
 /context/
 /AGENTS.md
+/skills/
+/.data/
+/.venv/
+/frontend/node_modules/
+/frontend/dist/
+__pycache__/
+*.egg-info/
+*.py[cod]
+.pytest_cache/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+.env
+.env.*
