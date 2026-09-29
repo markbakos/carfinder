@@ -6,6 +6,7 @@ import ProfilesPage from './pages/ProfilesPage'
 import ComparePage from './pages/ComparePage'
 import RunsPage from './pages/RunsPage'
 import SettingsPage from './pages/SettingsPage'
+import ImportPage from './pages/ImportPage'
 
 const navigation = [
   { to: '/', label: 'Overview', end: true },
@@ -46,6 +47,7 @@ export default function App() {
     <Route index element={<Dashboard />} />
     <Route path="listings" element={<ListingsPage />} />
     <Route path="listings/:listingId" element={<ListingDetailPage />} />
+    <Route path="import" element={<ImportPage />} />
     <Route path="profiles" element={<ProfilesPage />} />
     <Route path="compare" element={<ComparePage />} />
     <Route path="runs" element={<RunsPage />} />

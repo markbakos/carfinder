@@ -155,9 +155,14 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null)
-    const message = typeof body === 'object' && body !== null && 'detail' in body
-      ? String(body.detail)
-      : `Local API returned ${response.status}`
+    const detail = typeof body === 'object' && body !== null && 'detail' in body ? body.detail : null
+    const message = typeof detail === 'string'
+      ? detail
+      : Array.isArray(detail)
+        ? detail.map((item) => typeof item === 'object' && item !== null && 'msg' in item
+          ? String(item.msg)
+          : String(item)).join('; ')
+        : `Local API returned ${response.status}`
     throw new Error(message)
   }
   if (response.status === 204) return undefined as T

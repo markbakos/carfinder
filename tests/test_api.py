@@ -110,3 +110,36 @@ def test_profile_listing_history_and_user_state_api(monkeypatch, tmp_path) -> No
             assert any(item["trigger"] == "analyze" for item in runs.json()["items"])
 
     asyncio.run(exercise())
+
+
+def test_manual_import_api_is_idempotent_and_validates_input(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CARFINDER_HOME", str(tmp_path / "runtime"))
+    settings = Settings.load()
+    upgrade_database(settings.database_path)
+    app = create_app(settings)
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            payload = {
+                "url": "https://www.facebook.com/marketplace/item/api-import-1/",
+                "title": "Manual Marketplace listing",
+                "description": "Seller says the major service was done.",
+                "price_amount": 4100,
+                "price_currency": "EUR",
+                "make": "Volkswagen",
+                "model": "Golf",
+            }
+            imported = await client.post("/api/import", json=payload)
+            assert imported.status_code == 201, imported.text
+            result = imported.json()
+            assert result["snapshot_created"] is True
+            repeated = await client.post("/api/import", json=payload)
+            assert repeated.status_code == 201, repeated.text
+            assert repeated.json()["listing_id"] == result["listing_id"]
+            assert repeated.json()["snapshot_created"] is False
+            assert (await client.get("/api/listings", params={"provider": "manual_import"})).json()["total"] == 1
+
+            invalid = await client.post("/api/import", json={**payload, "year": 3000})
+            assert invalid.status_code == 422
+
+    asyncio.run(exercise())

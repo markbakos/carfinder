@@ -15,18 +15,19 @@ from pathlib import Path
 import httpx
 import typer
 from pydantic import ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from carfinder.config import Settings
 from carfinder.db.engine import create_database_engine
 from carfinder.db.migrations import migration_status, upgrade_database
-from carfinder.db.models import ProviderSource, SearchProfile
+from carfinder.db.models import Listing, ListingUserState, ProviderSource, ScrapeRun, SearchProfile
 from carfinder.logging_config import configure_logging
 from carfinder.paths import AppPaths
+from carfinder.imports import ManualListingImport
 from carfinder.analysis_service import analyze_stored_listings
 from carfinder.pipeline.lock import RunAlreadyActive, run_lock
-from carfinder.pipeline.runner import run_pipeline
+from carfinder.pipeline.runner import import_manual_listing, run_pipeline
 from carfinder.providers.base import ProviderSearchSource
 from carfinder.providers.registry import get_provider
 from carfinder.search import HardFilters, SoftPreferences, filter_dict, preferences_dict
@@ -36,9 +37,11 @@ app = typer.Typer(no_args_is_help=True, help="Local-first used-car discovery and
 db_app = typer.Typer(no_args_is_help=True)
 profile_app = typer.Typer(no_args_is_help=True)
 systemd_app = typer.Typer(no_args_is_help=True)
+listings_app = typer.Typer(no_args_is_help=True)
 app.add_typer(db_app, name="db")
 app.add_typer(profile_app, name="profile")
 app.add_typer(systemd_app, name="systemd")
+app.add_typer(listings_app, name="listings")
 
 
 @app.callback()
@@ -233,6 +236,38 @@ def analyze(
     typer.echo(f"Listings analyzed: {result['listings_analyzed']}")
     typer.echo(f"LLM calls: {result['llm_calls']}; cache hits: {result['llm_cache_hits']}")
     typer.echo(f"Warnings: {result['warning_count']}")
+
+
+@app.command("import-json")
+def import_json(path: str = typer.Argument(..., help="Canonical listing JSON file, or - for standard input.")) -> None:
+    """Import user-supplied listing data without fetching its source page."""
+    try:
+        if path == "-":
+            contents = sys.stdin.read(1_000_001)
+        else:
+            source = Path(path).expanduser()
+            if source.stat().st_size > 1_000_000:
+                raise ValueError("JSON input exceeds the 1 MB limit")
+            contents = source.read_text(encoding="utf-8")
+        if len(contents.encode("utf-8")) > 1_000_000:
+            raise ValueError("JSON input exceeds the 1 MB limit")
+        listing = ManualListingImport.model_validate_json(contents).to_normalized()
+    except Exception as error:
+        typer.echo(f"Invalid manual listing JSON: {type(error).__name__}: {error}", err=True)
+        raise typer.Exit(2) from error
+
+    settings = _settings_or_exit()
+    try:
+        with run_lock(AppPaths.from_environment().lock_file):
+            result = asyncio.run(import_manual_listing(settings, listing))
+    except RunAlreadyActive:
+        typer.echo("run already active")
+        return
+    except Exception as error:
+        typer.echo(f"Manual import failed: {type(error).__name__}: {error}", err=True)
+        raise typer.Exit(1) from error
+    action = "new snapshot" if result["snapshot_created"] else "unchanged listing"
+    typer.echo(f"Imported listing #{result['listing_id']} as {action}; run #{result['run_id']}: {result['status']}")
 
 
 @app.command()
@@ -434,6 +469,25 @@ def db_path() -> None:
     typer.echo(settings.database_path)
 
 
+@listings_app.command("stats")
+def listings_stats() -> None:
+    """Show local listing totals and the most recent recorded run."""
+    settings = _settings_or_exit()
+    engine = create_database_engine(settings.database_path)
+    try:
+        with Session(engine) as session:
+            total = session.scalar(select(func.count()).select_from(Listing)) or 0
+            active = session.scalar(select(func.count()).select_from(Listing).where(Listing.status == "active")) or 0
+            removed = session.scalar(select(func.count()).select_from(Listing).where(Listing.status == "removed")) or 0
+            watching = session.scalar(select(func.count()).select_from(ListingUserState).where(ListingUserState.state == "watching")) or 0
+            latest = session.scalar(select(ScrapeRun).order_by(ScrapeRun.started_at.desc(), ScrapeRun.id.desc()).limit(1))
+            typer.echo(f"Listings tracked: {total}")
+            typer.echo(f"Active: {active}; removed: {removed}; watching: {watching}")
+            typer.echo(f"Latest run: #{latest.id} {latest.status}" if latest else "Latest run: none")
+    finally:
+        engine.dispose()
+
+
 def _unit_quote(value: str) -> str:
     if "\n" in value or "\r" in value:
         raise ValueError("systemd unit values must be a single line")
@@ -458,7 +512,11 @@ def systemd_install(
             typer.echo(f"Invalid systemd calendar: {detail}", err=True)
             raise typer.Exit(2) from error
 
-    executable = shutil.which("carfinder") or str(Path(sys.argv[0]).resolve())
+    invoked = Path(sys.argv[0]).expanduser()
+    if invoked.name in {"carfinder", "carfinder.exe"} and invoked.is_file():
+        executable = str(invoked.resolve())
+    else:
+        executable = shutil.which("carfinder") or str(invoked.resolve())
     project_root = Path(__file__).resolve().parents[2]
     template_dir = project_root / "systemd"
     replacements = {

@@ -72,7 +72,7 @@ export default function ListingDetailPage() {
   return <main className="content detail-content">
     <Link className="back-link" to="/listings">← All listings</Link>
     <div className="detail-heading">
-      <div><p className="eyebrow">{snapshot.location.city ?? snapshot.location.raw ?? 'LOCAL LISTING'} · FIRST SEEN {formatDate(current.first_seen_at)}</p><h1>{vehicleName(snapshot)}</h1><p className="detail-subtitle">{snapshot.vehicle.year ?? 'Year unknown'} · {formatNumber(snapshot.vehicle.mileage_km, ' km')} · {snapshot.vehicle.fuel ?? 'Fuel unknown'} · {snapshot.vehicle.transmission ?? 'Transmission unknown'}</p></div>
+      <div><p className="eyebrow">{snapshot.location.city ?? snapshot.location.raw ?? 'LOCAL LISTING'} · {current.provider === 'manual_import' ? 'MANUAL IMPORT' : current.provider.toUpperCase()} · FIRST SEEN {formatDate(current.first_seen_at)}</p><h1>{vehicleName(snapshot)}</h1><p className="detail-subtitle">{snapshot.vehicle.year ?? 'Year unknown'} · {formatNumber(snapshot.vehicle.mileage_km, ' km')} · {snapshot.vehicle.fuel ?? 'Fuel unknown'} · {snapshot.vehicle.transmission ?? 'Transmission unknown'}</p></div>
       <div className="detail-price"><strong>{formatMoney(snapshot.price.amount, snapshot.price.currency)}</strong><span>Last checked {formatDate(current.last_detail_fetch_at)}</span><a className="button button-quiet" href={current.url} target="_blank" rel="noreferrer">Open original listing ↗</a></div>
     </div>
 

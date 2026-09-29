@@ -37,6 +37,9 @@ def test_init_migrates_sqlite_with_required_pragmas(monkeypatch, tmp_path: Path)
     database = tmp_path / "runtime/data/carfinder.sqlite3"
     current, head = migration_status(database)
     assert current == head == "4a7e8d90bf12"
+    stats = CliRunner().invoke(app, ["listings", "stats"])
+    assert stats.exit_code == 0, stats.output
+    assert "Listings tracked: 0" in stats.output
 
     engine = create_database_engine(database)
     try:

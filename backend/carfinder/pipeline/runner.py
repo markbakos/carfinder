@@ -149,9 +149,10 @@ def _changed_fields(previous: ListingSnapshot, current: NormalizedListing) -> di
 def _update_profile_match(
     session: Session,
     profile: SearchProfile,
-    source: ProviderSource,
+    source: ProviderSource | None,
     listing: Listing,
     snapshot: ListingSnapshot,
+    selection: str | None = None,
 ) -> None:
     values = {
         "make": snapshot.make,
@@ -179,11 +180,47 @@ def _update_profile_match(
         session.add(match)
     match.hard_filter_pass = passes
     match.match_details_json = {
-        "source_id": source.id,
-        "selection": "provider_search" if not profile.filters_json else "provider_search_and_hard_filters",
+        "source_id": source.id if source else None,
+        "selection": selection or ("provider_search" if not profile.filters_json else "provider_search_and_hard_filters"),
     }
     if passes:
         match.last_matched_at = _utcnow()
+
+
+def _record_listing_changes(
+    session: Session,
+    run: ScrapeRun,
+    listing: Listing,
+    previous: ListingSnapshot,
+    current: NormalizedListing,
+    snapshot_id: int,
+) -> None:
+    changed = _changed_fields(previous, current)
+    price_changed = previous.price_amount != current.price_amount or previous.price_currency != current.price_currency
+    description_changed = previous.description != current.description
+    if price_changed:
+        old_price = {"amount": previous.price_amount, "currency": previous.price_currency}
+        new_price = {"amount": current.price_amount, "currency": current.price_currency}
+        event_type = "price_changed"
+        if previous.price_currency in {"EUR", "RSD"} and previous.price_currency == current.price_currency and previous.price_amount is not None and current.price_amount is not None:
+            event_type = "price_dropped" if current.price_amount < previous.price_amount else "price_increased"
+        _event(session, listing, event_type, snapshot_id, old_price, new_price)
+        if event_type == "price_dropped":
+            run.price_drops += 1
+    if description_changed:
+        _event(
+            session, listing, "description_changed", snapshot_id,
+            {"description": previous.description}, {"description": current.description},
+        )
+    remaining = {key: value for key, value in changed.items() if key != "title"}
+    if remaining:
+        _event(
+            session, listing, "specifications_changed", snapshot_id,
+            {key: pair[0] for key, pair in remaining.items()},
+            {key: pair[1] for key, pair in remaining.items()},
+        )
+    if changed and not price_changed and not description_changed and not remaining:
+        _event(session, listing, "listing_changed", snapshot_id, {"title": previous.title}, {"title": current.title})
 
 
 async def _analyze_safely(
@@ -300,39 +337,7 @@ async def _store_listing(
     if previous is None:
         return
 
-    changed = _changed_fields(previous, normalized_detail)
-    price_changed = previous.price_amount != normalized_detail.price_amount or previous.price_currency != normalized_detail.price_currency
-    description_changed = previous.description != normalized_detail.description
-    if price_changed:
-        old_price = {"amount": previous.price_amount, "currency": previous.price_currency}
-        new_price = {"amount": normalized_detail.price_amount, "currency": normalized_detail.price_currency}
-        event_type = "price_changed"
-        if previous.price_currency in {"EUR", "RSD"} and previous.price_currency == normalized_detail.price_currency and previous.price_amount is not None and normalized_detail.price_amount is not None:
-            event_type = "price_dropped" if normalized_detail.price_amount < previous.price_amount else "price_increased"
-        _event(session, listing, event_type, snapshot.id, old_price, new_price)
-        if event_type == "price_dropped":
-            run.price_drops += 1
-    if description_changed:
-        _event(
-            session,
-            listing,
-            "description_changed",
-            snapshot.id,
-            {"description": previous.description},
-            {"description": normalized_detail.description},
-        )
-    remaining = {key: value for key, value in changed.items() if key not in {"title"}}
-    if remaining:
-        _event(
-            session,
-            listing,
-            "specifications_changed",
-            snapshot.id,
-            {key: pair[0] for key, pair in remaining.items()},
-            {key: pair[1] for key, pair in remaining.items()},
-        )
-    if changed and not price_changed and not description_changed and not remaining:
-        _event(session, listing, "listing_changed", snapshot.id, {"title": previous.title}, {"title": normalized_detail.title})
+    _record_listing_changes(session, run, listing, previous, normalized_detail, snapshot.id)
     run.listings_changed += 1
 
 
@@ -427,6 +432,80 @@ async def _process_source(
     run.sources_processed += 1
     session.commit()
     return True
+
+
+async def import_manual_listing(settings: Settings, normalized: NormalizedListing) -> dict[str, int | bool | str]:
+    """Store user-supplied normalized data through the regular analysis and scoring path."""
+    engine = create_database_engine(settings.database_path)
+    try:
+        with Session(engine) as session:
+            now = _utcnow()
+            run = ScrapeRun(trigger="manual_import", hostname=socket.gethostname())
+            session.add(run)
+            session.flush()
+            listing = session.scalar(select(Listing).where(
+                Listing.provider == normalized.provider, Listing.external_id == normalized.external_id,
+            ))
+            created = listing is None
+            if created:
+                listing = Listing(
+                    provider=normalized.provider, external_id=normalized.external_id, url=normalized.url,
+                    first_seen_at=now, last_seen_at=now, status="active",
+                )
+                session.add(listing)
+                session.flush()
+                run.listings_new = 1
+            else:
+                was_removed = listing.status == "removed"
+                listing.url = normalized.url
+                listing.last_seen_at = now
+                listing.missing_run_count = 0
+                if was_removed:
+                    listing.status = "active"
+                    listing.removed_at = None
+                    _event(session, listing, "reappeared", listing.current_snapshot_id)
+
+            previous = session.get(ListingSnapshot, listing.current_snapshot_id) if listing.current_snapshot_id else None
+            digest = _content_hash(normalized)
+            snapshot_created = previous is None or previous.content_hash != digest
+            if snapshot_created:
+                snapshot = _snapshot(listing.id, normalized)
+                session.add(snapshot)
+                session.flush()
+                listing.current_snapshot_id = snapshot.id
+                if previous is None:
+                    if created:
+                        _event(session, listing, "discovered", snapshot.id)
+                else:
+                    _record_listing_changes(session, run, listing, previous, normalized, snapshot.id)
+                    run.listings_changed = 1
+            else:
+                snapshot = previous
+
+            run.listings_seen = 1
+            run.sources_processed = 1
+            profiles = session.scalars(select(SearchProfile).where(SearchProfile.enabled.is_(True))).all()
+            run.profiles_processed = len(profiles)
+            for profile in profiles:
+                _update_profile_match(session, profile, None, listing, snapshot, selection="manual_import")
+            await _analyze_safely(session, run, listing, snapshot, settings, allow_llm=True)
+            try:
+                with session.begin_nested():
+                    recompute_all_scores(session)
+            except Exception as error:
+                _message(
+                    session, run, "warning", "scoring_recompute_failed",
+                    f"Valuation or score refresh failed: {type(error).__name__}",
+                )
+            run.status = "partial" if run.warning_count or run.error_count else "success"
+            run.finished_at = _utcnow()
+            session.commit()
+            return {
+                "run_id": run.id, "listing_id": listing.id, "status": run.status,
+                "snapshot_created": snapshot_created,
+            }
+    finally:
+        engine.dispose()
 
 
 async def run_pipeline(

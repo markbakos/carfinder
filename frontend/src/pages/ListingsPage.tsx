@@ -58,7 +58,7 @@ export default function ListingsPage() {
   }
 
   return <main className="content">
-    <PageTitle eyebrow="YOUR INVENTORY" title="Listings" description="Every discovered car stays in your local history, even when it no longer matches a search." action={selected.length >= 2 ? <Link className="button button-primary" to={`/compare?ids=${selected.join(',')}${draft.profile ? `&profile=${draft.profile}` : ''}`}>Compare {selected.length} cars <span aria-hidden="true">⇄</span></Link> : <span className="selection-hint">Select 2–5 cars to compare</span>} />
+    <PageTitle eyebrow="YOUR INVENTORY" title="Listings" description="Every discovered car stays in your local history, even when it no longer matches a search." action={<><Link className="button button-quiet" to="/import">＋ Add listing</Link>{selected.length >= 2 ? <Link className="button button-primary" to={`/compare?ids=${selected.join(',')}${draft.profile ? `&profile=${draft.profile}` : ''}`}>Compare {selected.length} cars <span aria-hidden="true">⇄</span></Link> : <span className="selection-hint">Select 2–5 cars to compare</span>}</>} />
     <form className="filter-panel" onSubmit={handleSubmit}>
       <div className="filter-grid filter-grid-main">
         <Field label="Search listing text"><input type="search" value={draft.q ?? ''} onChange={(event) => handleChange('q', event.target.value)} placeholder="Service history, engine…" /></Field>
@@ -77,7 +77,7 @@ export default function ListingsPage() {
         <Field label="Currency"><select value={draft.price_currency ?? 'EUR'} onChange={(event) => handleChange('price_currency', event.target.value)}><option>EUR</option><option>RSD</option></select></Field>
         <Field label="Mileage up to (km)"><input type="number" min="0" value={draft.mileage_max ?? ''} onChange={(event) => handleChange('mileage_max', event.target.value)} /></Field>
         <Field label="Minimum quality"><input type="number" min="0" max="100" value={draft.minimum_score ?? ''} onChange={(event) => handleChange('minimum_score', event.target.value)} /></Field>
-        <Field label="Provider"><select value={draft.provider ?? ''} onChange={(event) => handleChange('provider', event.target.value)}><option value="">All providers</option><option value="polovniautomobili">PolovniAutomobili</option></select></Field>
+        <Field label="Provider"><select value={draft.provider ?? ''} onChange={(event) => handleChange('provider', event.target.value)}><option value="">All providers</option><option value="polovniautomobili">PolovniAutomobili</option><option value="manual_import">Manual import</option></select></Field>
         <label className="check-field"><input type="checkbox" checked={draft.price_drop === 'true'} onChange={(event) => handleChange('price_drop', event.target.checked ? 'true' : '')} /><span>Price dropped</span></label>
       </div>
       <div className="filter-actions"><button className="button button-primary" type="submit">Apply filters</button><button className="button button-quiet" type="button" onClick={() => { setDraft({ sort: 'newest' }); setParams({ sort: 'newest' }) }}>Clear</button><span className="results-count">{listings.data ? `${listings.data.total.toLocaleString('sr-RS')} results` : ' '}</span></div>

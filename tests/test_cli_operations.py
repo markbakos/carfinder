@@ -35,9 +35,13 @@ def test_db_backup_copies_committed_wal_data(monkeypatch, tmp_path: Path) -> Non
 def test_systemd_install_renders_user_units(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CARFINDER_HOME", str(tmp_path / "runtime"))
     monkeypatch.setenv("PATH", "/opt/carfinder/bin:/usr/bin")
+    active_executable = tmp_path / "venv/bin/carfinder"
+    active_executable.parent.mkdir(parents=True)
+    active_executable.touch()
+    monkeypatch.setattr("carfinder.cli.sys.argv", [str(active_executable)])
     monkeypatch.setattr("carfinder.cli.shutil.which", lambda name: {
         "systemd-analyze": None,
-        "carfinder": "/opt/carfinder/bin/carfinder",
+        "carfinder": "/usr/bin/carfinder",
     }.get(name))
 
     result = CliRunner().invoke(app, ["systemd", "install", "--calendar", "weekly", "--randomized-delay-seconds", "42"])
@@ -46,7 +50,7 @@ def test_systemd_install_renders_user_units(monkeypatch, tmp_path: Path) -> None
     service = (unit_dir / "carfinder.service").read_text(encoding="utf-8")
     timer = (unit_dir / "carfinder.timer").read_text(encoding="utf-8")
     assert 'Environment="PATH=/opt/carfinder/bin:/usr/bin"' in service
-    assert 'ExecStart="/opt/carfinder/bin/carfinder" run' in service
+    assert f'ExecStart="{active_executable}" run' in service
     assert "OnCalendar=weekly" in timer
     assert "RandomizedDelaySec=42" in timer
     assert "Persistent=true" in timer

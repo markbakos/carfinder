@@ -110,6 +110,21 @@ def test_local_ui_core_workflows(monkeypatch, tmp_path) -> None:
                 page.get_by_text("No warnings or errors were recorded.").wait_for(state="visible")
                 page.goto(f"{base_url}/listings/1", wait_until="networkidle")
                 page.get_by_role("heading", name=title).wait_for(state="visible")
+                page.goto(f"{base_url}/import", wait_until="networkidle")
+                page.get_by_label("Listing JSON").fill('''{
+                  "url": "https://www.facebook.com/marketplace/item/ui-import-1/",
+                  "title": "Manual import example",
+                  "description": "Seller claims the major service was performed.",
+                  "make": "Volkswagen",
+                  "model": "Golf",
+                  "price_amount": 3900,
+                  "price_currency": "EUR"
+                }''')
+                with page.expect_response("**/api/import") as import_response:
+                    page.get_by_role("button", name="Import listing").click()
+                response = import_response.value
+                assert response.status == 201, response.text()
+                page.get_by_role("heading", name="Manual import example").wait_for(state="visible")
                 browser.close()
         finally:
             server.should_exit = True

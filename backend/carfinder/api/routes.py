@@ -31,9 +31,11 @@ from carfinder.paths import AppPaths
 from carfinder.pipeline.lock import RunAlreadyActive, run_lock
 from carfinder.pipeline.runner import run_pipeline
 from carfinder.analysis_service import analyze_stored_listings
+from carfinder.imports import ManualListingImport
 from carfinder.providers.base import ProviderSearchSource
 from carfinder.providers.registry import get_provider
 from carfinder.search import HardFilters, SoftPreferences, filter_dict, preferences_dict
+from carfinder.pipeline.runner import import_manual_listing
 
 UserStateName = Literal[
     "new", "watching", "interested", "maybe", "rejected", "contacted",
@@ -282,6 +284,14 @@ def create_router(settings: Settings) -> APIRouter:
     def providers() -> list[dict[str, Any]]:
         adapter = get_provider("polovniautomobili")
         return [{"id": adapter.provider_id, "capabilities": adapter.capabilities.model_dump()}]
+
+    @api.post("/import", status_code=201)
+    def import_listing(payload: ManualListingImport) -> dict[str, Any]:
+        try:
+            with run_lock(AppPaths.from_environment().lock_file):
+                return asyncio.run(import_manual_listing(settings, payload.to_normalized()))
+        except RunAlreadyActive as error:
+            raise HTTPException(status_code=409, detail="run already active") from error
 
     @api.get("/profiles")
     def profiles() -> list[dict[str, Any]]:

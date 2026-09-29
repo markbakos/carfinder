@@ -46,6 +46,16 @@ Market comparisons use active local listings with the same make/model, currency,
 
 The built local UI includes an overview, searchable/filterable listings, listing history and evidence, saved-search editing, side-by-side comparison, run history, and local settings. `carfinder serve` serves the Vite build and its client-side routes; Node is only needed to build or develop the UI. Prices stay in the listing's original currency; CarFinder does not apply exchange-rate conversions.
 
+## Manually add a listing
+
+Use **Add listing** in the Listings screen, or pipe canonical JSON to the CLI. The source link and details you provide go through the same history, analysis, profile matching, valuation, and scoring flow as discovered listings; CarFinder does not fetch that page or require Facebook access. Phone numbers and email addresses are removed from the imported title and description.
+
+```sh
+cat listing.json | uv run carfinder import-json -
+```
+
+JSON uses the normalized listing field names, such as `url`, `title`, `description`, `price_amount`, `price_currency`, `make`, `model`, `year`, and `mileage_km`. `url` is required; its SHA-256 digest supplies a stable import identity unless `external_id` is provided.
+
 ## Scheduled scans and backups
 
 Generate a systemd user service and timer for the active CarFinder executable:
