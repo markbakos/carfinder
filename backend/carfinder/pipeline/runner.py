@@ -28,6 +28,7 @@ from carfinder.db.models import (
 from carfinder.providers.base import DiscoveredListing, NormalizedListing, ProviderSearchSource, RunContext
 from carfinder.providers.registry import get_provider
 from carfinder.search import matches_filters
+from carfinder.scoring_service import recompute_all_scores
 
 
 @dataclass(frozen=True)
@@ -496,6 +497,12 @@ async def run_pipeline(
                                 await provider.close_run()
                             except Exception as error:
                                 _message(session, run, "warning", "provider_close_failed", f"Provider shutdown warning: {type(error).__name__}: {error}")
+                if run.sources_processed:
+                    try:
+                        with session.begin_nested():
+                            recompute_all_scores(session)
+                    except Exception as error:
+                        _message(session, run, "warning", "scoring_recompute_failed", f"Valuation or score refresh failed: {type(error).__name__}")
             if run.status == "running":
                 has_warnings = run.warning_count > 0 or run.error_count > 0
                 run.status = "failed" if run.error_count and not run.sources_processed else "partial" if has_warnings else "success"

@@ -63,6 +63,56 @@ class HardFilters(BaseModel):
         return self
 
 
+class IdealMaximum(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ideal_max: int = Field(ge=0)
+
+
+class PricePreference(IdealMaximum):
+    currency: str = "EUR"
+
+    @model_validator(mode="after")
+    def valid_currency(self) -> PricePreference:
+        if self.currency not in {"EUR", "RSD"}:
+            raise ValueError("currency must be EUR or RSD")
+        return self
+
+
+class PreferredValues(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prefer: list[str] = Field(min_length=1)
+
+
+class MarketDiscountPreference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preferred_min_pct: float = Field(ge=0, le=100)
+
+
+class SoftPreferences(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    mileage_km: IdealMaximum | None = None
+    price: PricePreference | None = None
+    year: ValueRange | None = None
+    fuel: PreferredValues | None = None
+    transmission: PreferredValues | None = None
+    body_type: PreferredValues | None = None
+    location: PreferredValues | None = None
+    equipment: PreferredValues | None = None
+    market_discount: MarketDiscountPreference | None = None
+
+    @model_validator(mode="after")
+    def nonblank_preferences(self) -> SoftPreferences:
+        for name in ("fuel", "transmission", "body_type", "location", "equipment"):
+            values = getattr(self, name)
+            if values is not None and any(not value for value in values.prefer):
+                raise ValueError(f"{name} preference values must not be blank")
+        return self
+
+
 def _norm(value: Any) -> str:
     return " ".join(str(value).strip().casefold().split())
 
@@ -121,3 +171,8 @@ def matches_filters(filters: HardFilters | Mapping[str, Any], listing: Mapping[s
 def filter_dict(filters: HardFilters | Mapping[str, Any]) -> dict[str, Any]:
     hard = filters if isinstance(filters, HardFilters) else HardFilters.model_validate(filters)
     return hard.model_dump(mode="json", exclude_none=True)
+
+
+def preferences_dict(preferences: SoftPreferences | Mapping[str, Any]) -> dict[str, Any]:
+    soft = preferences if isinstance(preferences, SoftPreferences) else SoftPreferences.model_validate(preferences)
+    return soft.model_dump(mode="json", exclude_none=True)

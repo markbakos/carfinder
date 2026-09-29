@@ -22,7 +22,7 @@ from carfinder.pipeline.lock import RunAlreadyActive, run_lock
 from carfinder.pipeline.runner import run_pipeline
 from carfinder.providers.base import ProviderSearchSource
 from carfinder.providers.registry import get_provider
-from carfinder.search import HardFilters, filter_dict
+from carfinder.search import HardFilters, SoftPreferences, filter_dict, preferences_dict
 
 app = typer.Typer(no_args_is_help=True, help="Local-first used-car discovery and buying intelligence.")
 db_app = typer.Typer(no_args_is_help=True)
@@ -220,6 +220,7 @@ def profile_create(
     name: str,
     search_url: str | None = typer.Option(None, "--search-url", help="Imported PolovniAutomobili search URL."),
     filters_json: str = typer.Option("{}", "--filters-json", help="Hard filters as a JSON object."),
+    preferences_json: str = typer.Option("{}", "--preferences-json", help="Soft preferences as a JSON object."),
     provider: str = typer.Option("polovniautomobili", help="Listing provider ID."),
     initial_import_mode: str = typer.Option("seed_only", help="seed_only, analyze_all, or analyze_top_n."),
     analyze_top_n: int = typer.Option(25, min=1, help="Maximum initial listings for analyze_top_n."),
@@ -233,8 +234,13 @@ def profile_create(
     except Exception as error:
         typer.echo(f"Invalid filters JSON: {error}", err=True)
         raise typer.Exit(2) from error
-    if not search_url and not filters:
-        typer.echo("Provide --search-url or non-empty --filters-json", err=True)
+    try:
+        preferences = preferences_dict(SoftPreferences.model_validate_json(preferences_json))
+    except Exception as error:
+        typer.echo(f"Invalid preferences JSON: {error}", err=True)
+        raise typer.Exit(2) from error
+    if not search_url and not filters and not preferences:
+        typer.echo("Provide --search-url, non-empty --filters-json, or --preferences-json", err=True)
         raise typer.Exit(2)
     try:
         adapter = get_provider(provider)
@@ -251,7 +257,10 @@ def profile_create(
     engine = create_database_engine(settings.database_path)
     try:
         with Session(engine) as session:
-            profile = SearchProfile(name=name, filters_json=filters, initial_import_mode=initial_import_mode)
+            profile = SearchProfile(
+                name=name, filters_json=filters, preferences_json=preferences,
+                initial_import_mode=initial_import_mode,
+            )
             session.add(profile)
             session.flush()
             session.add(ProviderSource(
@@ -264,6 +273,8 @@ def profile_create(
             typer.echo(f"Created profile #{profile.id}: {profile.name}")
             if filters:
                 typer.echo(f"Hard filters: {json.dumps(filters, ensure_ascii=False, sort_keys=True)}")
+            if preferences:
+                typer.echo(f"Soft preferences: {json.dumps(preferences, ensure_ascii=False, sort_keys=True)}")
     except Exception as error:
         typer.echo(f"Could not create profile: {error}", err=True)
         raise typer.Exit(1) from error

@@ -30,10 +30,12 @@ def test_profile_listing_history_and_user_state_api(monkeypatch, tmp_path) -> No
             created = await client.post("/api/profiles", json={
                 "name": "Golf V diesel",
                 "filters": {"makes": ["Volkswagen"], "models": ["Golf"], "fuel": ["diesel"]},
+                "preferences": {"mileage_km": {"ideal_max": 180000}, "equipment": {"prefer": ["cruise_control"]}},
             })
             assert created.status_code == 201, created.text
             profile = created.json()
             assert profile["filters"]["fuel"] == ["diesel"]
+            assert profile["preferences"]["mileage_km"]["ideal_max"] == 180000
             assert profile["sources"][0]["search_url"] is None
             assert (await client.get("/api/profiles")).json()[0]["id"] == profile["id"]
 
@@ -70,6 +72,9 @@ def test_profile_listing_history_and_user_state_api(monkeypatch, tmp_path) -> No
             assert listing_response.json()["current"]["description"] == "Seller description"
             filtered = await client.get("/api/listings", params={"profile": profile["id"], "fuel": "diesel", "price_drop": "true"})
             assert filtered.json()["total"] == 1
+            ranked = await client.get("/api/listings", params={"profile": profile["id"], "sort": "rank_desc"})
+            assert ranked.json()["total"] == 1
+            assert (await client.get("/api/listings", params={"minimum_score": 0})).json()["total"] == 0
             history = await client.get(f"/api/listings/{listing_id}/history")
             assert len(history.json()["snapshots"]) == 1
             assert history.json()["events"][0]["type"] == "price_dropped"
@@ -85,7 +90,16 @@ def test_profile_listing_history_and_user_state_api(monkeypatch, tmp_path) -> No
             analysis = await client.get(f"/api/listings/{listing_id}/analysis")
             assert analysis.json()["status"] == "complete"
             assert any(item["field"] == "vin" for item in analysis.json()["result"]["missing_information"])
-            assert (await client.get("/api/stats")).json()["listings_total"] == 1
+            scored = (await client.get(f"/api/listings/{listing_id}", params={"profile": profile["id"]})).json()
+            assert scored["market_value"]["confidence"] == "insufficient"
+            assert scored["market_value"]["median_amount"] is None
+            assert scored["profile_fit_score"] == 45
+            assert scored["scores"]["quality_score"] is None
+            matches = await client.get(f"/api/listings/{listing_id}/matches")
+            assert matches.json()[0]["profile_fit_explanation"]["preferences"]
+            stats = (await client.get("/api/stats")).json()
+            assert stats["listings_total"] == 1
+            assert stats["strong_deals"] == 0
             runs = await client.get("/api/runs")
             assert any(item["trigger"] == "analyze" for item in runs.json()["items"])
 

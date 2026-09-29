@@ -180,6 +180,16 @@ async def analyze_stored_listings(
                 await analyze_snapshot(session, run, listing, snapshot, settings, force=force, bypass_cache=force)
                 analyzed_count += 1
                 session.commit()
+            from carfinder.scoring_service import recompute_all_scores
+            try:
+                with session.begin_nested():
+                    recompute_all_scores(session)
+            except Exception as error:
+                session.add(ScrapeRunMessage(
+                    run_id=run.id, level="warning", code="scoring_recompute_failed",
+                    message=f"Valuation or score refresh failed: {type(error).__name__}",
+                ))
+                run.warning_count += 1
             run.status = "partial" if run.warning_count else "success"
             run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
             session.commit()

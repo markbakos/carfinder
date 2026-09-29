@@ -18,7 +18,9 @@ from carfinder.db.models import (
     ListingClaim,
     ListingEvent,
     ListingSnapshot,
+    ListingScore,
     ListingUserState,
+    ListingValuation,
     ProfileListingMatch,
     ProviderSource,
     ScrapeRun,
@@ -31,7 +33,7 @@ from carfinder.pipeline.runner import run_pipeline
 from carfinder.analysis_service import analyze_stored_listings
 from carfinder.providers.base import ProviderSearchSource
 from carfinder.providers.registry import get_provider
-from carfinder.search import HardFilters, filter_dict
+from carfinder.search import HardFilters, SoftPreferences, filter_dict, preferences_dict
 
 UserStateName = Literal[
     "new", "watching", "interested", "maybe", "rejected", "contacted",
@@ -58,7 +60,7 @@ class ProfileCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     enabled: bool = True
     filters: HardFilters = Field(default_factory=HardFilters)
-    preferences: dict[str, Any] = Field(default_factory=dict)
+    preferences: SoftPreferences = Field(default_factory=SoftPreferences)
     initial_import_mode: Literal["seed_only", "analyze_all", "analyze_top_n"] = "seed_only"
     sources: list[SourceInput] = Field(default_factory=list)
     provider: str = "polovniautomobili"
@@ -73,8 +75,8 @@ class ProfileCreate(BaseModel):
 
     @model_validator(mode="after")
     def source_required(self) -> ProfileCreate:
-        if not self.sources and not self.search_url and not filter_dict(self.filters):
-            raise ValueError("provide a search URL, source, or non-empty native filters")
+        if not self.sources and not self.search_url and not filter_dict(self.filters) and not preferences_dict(self.preferences):
+            raise ValueError("provide a search URL, source, hard filters, or soft preferences")
         return self
 
 
@@ -84,7 +86,7 @@ class ProfilePatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     enabled: bool | None = None
     filters: HardFilters | None = None
-    preferences: dict[str, Any] | None = None
+    preferences: SoftPreferences | None = None
     initial_import_mode: Literal["seed_only", "analyze_all", "analyze_top_n"] | None = None
     sources: list[SourceInput] | None = None
 
@@ -134,14 +136,28 @@ def _user_state_dict(item: ListingUserState | None) -> dict[str, Any]:
     }
 
 
-def _listing_dict(session: Session, item: Listing, snapshot: ListingSnapshot | None) -> dict[str, Any]:
+def _listing_dict(
+    session: Session,
+    item: Listing,
+    snapshot: ListingSnapshot | None,
+    profile_id: int | None = None,
+) -> dict[str, Any]:
     state = session.get(ListingUserState, item.id)
+    valuation = session.scalar(select(ListingValuation).where(ListingValuation.snapshot_id == snapshot.id)) if snapshot else None
+    score = session.scalar(select(ListingScore).where(ListingScore.snapshot_id == snapshot.id)) if snapshot else None
     match_count = session.scalar(
         select(func.count()).select_from(ProfileListingMatch).where(
             ProfileListingMatch.listing_id == item.id,
             ProfileListingMatch.hard_filter_pass.is_(True),
         )
     ) or 0
+    match_query = select(ProfileListingMatch).where(
+        ProfileListingMatch.listing_id == item.id,
+        ProfileListingMatch.hard_filter_pass.is_(True),
+    )
+    if profile_id is not None:
+        match_query = match_query.where(ProfileListingMatch.profile_id == profile_id)
+    match = session.scalar(match_query.order_by(ProfileListingMatch.rank_score.desc().nullslast()).limit(1))
     return {
         "id": item.id,
         "provider": item.provider,
@@ -154,8 +170,36 @@ def _listing_dict(session: Session, item: Listing, snapshot: ListingSnapshot | N
         "removed_at": item.removed_at.isoformat() if item.removed_at else None,
         "missing_run_count": item.missing_run_count,
         "current": _snapshot_dict(snapshot) if snapshot else None,
+        "market_value": _valuation_dict(valuation) if valuation else None,
+        "scores": _score_dict(score) if score else None,
+        "profile_fit_score": match.profile_fit_score if match else None,
+        "rank_score": match.rank_score if match else None,
+        "profile_fit_explanation": match.profile_fit_explanation_json if match else None,
         "user_state": _user_state_dict(state),
         "matched_profile_count": match_count,
+    }
+
+
+def _valuation_dict(item: ListingValuation) -> dict[str, Any]:
+    return {
+        "median_amount": item.median_amount,
+        "range": {"low": item.lower_amount, "high": item.upper_amount},
+        "difference_pct": item.difference_pct,
+        "sample_count": item.sample_count,
+        "excluded_outliers": item.excluded_outliers,
+        "confidence": item.confidence,
+        "details": item.details_json,
+        "computed_at": item.computed_at.isoformat(),
+    }
+
+
+def _score_dict(item: ListingScore) -> dict[str, Any]:
+    return {
+        "quality_score": item.quality_score,
+        "coverage_pct": item.coverage_pct,
+        "dimensions": item.dimensions_json,
+        "explanation": item.explanation_json,
+        "computed_at": item.computed_at.isoformat(),
     }
 
 
@@ -234,7 +278,7 @@ def create_router(settings: Settings) -> APIRouter:
             with Session(engine) as session:
                 profile = SearchProfile(
                     name=payload.name.strip(), enabled=payload.enabled,
-                    filters_json=filters, preferences_json=payload.preferences,
+                    filters_json=filters, preferences_json=preferences_dict(payload.preferences),
                     initial_import_mode=payload.initial_import_mode,
                 )
                 session.add(profile)
@@ -280,7 +324,7 @@ def create_router(settings: Settings) -> APIRouter:
                 else:
                     filters = profile.filters_json
                 if "preferences" in data and data["preferences"] is not None:
-                    profile.preferences_json = data["preferences"]
+                    profile.preferences_json = preferences_dict(data["preferences"])
                 if "initial_import_mode" in data and data["initial_import_mode"] is not None:
                     profile.initial_import_mode = data["initial_import_mode"]
                 if "sources" in data:
@@ -340,10 +384,11 @@ def create_router(settings: Settings) -> APIRouter:
         mileage_max: int | None = None,
         status: str | None = None,
         user_state: UserStateName | None = None,
+        minimum_score: int | None = Query(default=None, ge=0, le=100),
         new_since: datetime | None = None,
         price_drop: bool = False,
         q: str | None = None,
-        sort: Literal["newest", "price_asc", "price_desc", "first_seen"] = "newest",
+        sort: Literal["newest", "price_asc", "price_desc", "quality_desc", "rank_desc", "first_seen"] = "newest",
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
@@ -352,7 +397,9 @@ def create_router(settings: Settings) -> APIRouter:
             with Session(engine) as session:
                 stmt = select(Listing, ListingSnapshot, ListingUserState).outerjoin(
                     ListingSnapshot, ListingSnapshot.id == Listing.current_snapshot_id
-                ).outerjoin(ListingUserState, ListingUserState.listing_id == Listing.id)
+                ).outerjoin(ListingUserState, ListingUserState.listing_id == Listing.id).outerjoin(
+                    ListingScore, ListingScore.snapshot_id == ListingSnapshot.id
+                )
                 if profile is not None:
                     stmt = stmt.join(ProfileListingMatch, ProfileListingMatch.listing_id == Listing.id).where(
                         ProfileListingMatch.profile_id == profile,
@@ -382,6 +429,8 @@ def create_router(settings: Settings) -> APIRouter:
                         conditions.append(or_(ListingUserState.state == "new", ListingUserState.listing_id.is_(None)))
                     else:
                         conditions.append(ListingUserState.state == user_state)
+                if minimum_score is not None:
+                    conditions.append(ListingScore.quality_score >= minimum_score)
                 if new_since:
                     utc_since = new_since.replace(tzinfo=timezone.utc) if new_since.tzinfo is None else new_since.astimezone(timezone.utc)
                     conditions.append(Listing.first_seen_at >= utc_since.replace(tzinfo=None))
@@ -403,15 +452,18 @@ def create_router(settings: Settings) -> APIRouter:
                     "first_seen": Listing.first_seen_at.asc(),
                     "price_asc": ListingSnapshot.price_amount.asc().nullslast(),
                     "price_desc": ListingSnapshot.price_amount.desc().nullslast(),
+                    "quality_desc": ListingScore.quality_score.desc().nullslast(),
+                    "rank_desc": (ProfileListingMatch.rank_score.desc().nullslast() if profile is not None
+                                  else ListingScore.quality_score.desc().nullslast()),
                 }[sort]
                 rows = session.execute(stmt.order_by(ordering, Listing.id).limit(limit).offset(offset)).all()
-                return {"items": [_listing_dict(session, listing, snapshot) for listing, snapshot, _state in rows],
+                return {"items": [_listing_dict(session, listing, snapshot, profile) for listing, snapshot, _state in rows],
                         "total": total, "limit": limit, "offset": offset}
         finally:
             engine.dispose()
 
     @api.get("/listings/{listing_id}")
-    def get_listing(listing_id: int) -> dict[str, Any]:
+    def get_listing(listing_id: int, profile: int | None = None) -> dict[str, Any]:
         engine = _engine(settings)
         try:
             with Session(engine) as session:
@@ -419,7 +471,7 @@ def create_router(settings: Settings) -> APIRouter:
                 if listing is None:
                     raise HTTPException(status_code=404, detail="Listing not found")
                 snapshot = session.get(ListingSnapshot, listing.current_snapshot_id) if listing.current_snapshot_id else None
-                return _listing_dict(session, listing, snapshot)
+                return _listing_dict(session, listing, snapshot, profile)
         finally:
             engine.dispose()
 
@@ -438,7 +490,11 @@ def create_router(settings: Settings) -> APIRouter:
                     ListingEvent.listing_id == listing_id
                 ).order_by(ListingEvent.occurred_at, ListingEvent.id)).all()
                 return {
-                    "snapshots": [_snapshot_dict(item) for item in snapshots],
+                    "snapshots": [{
+                        **_snapshot_dict(item),
+                        "market_value": (_valuation_dict(value) if (value := session.scalar(select(ListingValuation).where(ListingValuation.snapshot_id == item.id))) else None),
+                        "scores": (_score_dict(score) if (score := session.scalar(select(ListingScore).where(ListingScore.snapshot_id == item.id))) else None),
+                    } for item in snapshots],
                     "events": [{"id": event.id, "type": event.event_type, "occurred_at": event.occurred_at.isoformat(),
                                 "old": event.old_value_json, "new": event.new_value_json, "snapshot_id": event.snapshot_id}
                                for event in events],
@@ -500,6 +556,8 @@ def create_router(settings: Settings) -> APIRouter:
                          "last_matched_at": match.last_matched_at.isoformat(),
                          "hard_filter_pass": match.hard_filter_pass,
                          "profile_fit_score": match.profile_fit_score,
+                         "rank_score": match.rank_score,
+                         "profile_fit_explanation": match.profile_fit_explanation_json,
                          "details": match.match_details_json}
                         for match, profile in rows]
         finally:
@@ -577,6 +635,12 @@ def create_router(settings: Settings) -> APIRouter:
                         ListingEvent.event_type == "price_dropped", ListingEvent.occurred_at >= now - timedelta(days=7)
                     )) or 0,
                     "watching": session.scalar(select(func.count()).select_from(ListingUserState).where(ListingUserState.state == "watching")) or 0,
+                    "strong_deals": session.scalar(select(func.count()).select_from(ListingScore).join(
+                        Listing, Listing.current_snapshot_id == ListingScore.snapshot_id
+                    ).join(ListingValuation, ListingValuation.snapshot_id == ListingScore.snapshot_id).where(
+                        Listing.status == "active", ListingScore.quality_score >= 70,
+                        ListingValuation.difference_pct <= -10, ListingValuation.confidence.in_(["medium", "high"]),
+                    )) or 0,
                     "last_run": _run_dict(last_run) if last_run else None,
                 }
         finally:

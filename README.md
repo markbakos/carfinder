@@ -28,6 +28,9 @@ uv run carfinder profile create "Golf 5 Diesel" \
   --filters-json '{"makes":["Volkswagen"],"models":["Golf"],"generations":["Golf V"],"fuel":["diesel"],"year":{"min":2004,"max":2009},"price":{"max":5500},"mileage_km":{"max":250000}}'
 uv run carfinder profile create "Advanced Polovni search" \
   --search-url 'https://www.polovniautomobili.com/auto-oglasi/pretraga?...'
+uv run carfinder profile create "Low-mileage Golf" \
+  --filters-json '{"makes":["Volkswagen"],"models":["Golf"]}' \
+  --preferences-json '{"mileage_km":{"ideal_max":180000},"equipment":{"prefer":["cruise_control"]}}'
 uv run carfinder profile list
 uv run carfinder run --profile "Golf 5 Diesel"
 uv run carfinder analyze
@@ -38,6 +41,8 @@ The profile defaults to `seed_only`: deterministic findings are stored on the fi
 `carfinder run` only writes to SQLite and works while the API/UI is stopped. The UI is optional; retained descriptions redact phone numbers and email addresses.
 
 The local API exposes saved profiles, filtered listings, listing history/matches, shopping state, scraper runs, and summary stats under `/api`. Native hard-filter values within one dimension are ORed; separate dimensions are combined with AND. Preferences are stored separately and do not remove listings from the database.
+
+Market comparisons use active local listings with the same make/model, currency, year within two years, fuel and transmission family. Generation, engine size and mileage are preferred, with any relaxation recorded in the explanation. Values use a robust median/outlier filter; fewer than three retained comparables produces no estimated median, and confidence is based on sample count. Quality dimensions are evidence-based and unsupported dimensions remain unscored. Profile fit is reported separately from quality; rank combines them 70/30 when both scores are available. `/api/listings` supports `minimum_score`, `sort=quality_desc`, and profile-scoped `sort=rank_desc`.
 
 Runtime data uses XDG paths by default. Set `CARFINDER_HOME=./.data` for a disposable development data/config/state tree; this path is ignored by Git.
 

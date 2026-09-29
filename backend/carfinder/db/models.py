@@ -153,7 +153,9 @@ class ProfileListingMatch(Base):
     last_matched_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp())
     hard_filter_pass: Mapped[bool] = mapped_column(nullable=False, default=True, server_default=text("1"))
     profile_fit_score: Mapped[int | None] = mapped_column(Integer)
+    rank_score: Mapped[int | None] = mapped_column(Integer)
     match_details_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    profile_fit_explanation_json: Mapped[dict | None] = mapped_column(JSON)
 
 
 class ListingUserState(Base):
@@ -211,6 +213,44 @@ class LlmCache(Base):
     knowledge_version: Mapped[str] = mapped_column(String(64), nullable=False)
     response_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp())
+
+
+class ListingValuation(Base):
+    __tablename__ = "listing_valuations"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", name="uq_valuation_snapshot"),
+        Index("ix_valuations_listing_computed", "listing_id", "computed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), nullable=False)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("listing_snapshots.id", ondelete="CASCADE"), nullable=False)
+    median_amount: Mapped[int | None] = mapped_column(Integer)
+    lower_amount: Mapped[int | None] = mapped_column(Integer)
+    upper_amount: Mapped[int | None] = mapped_column(Integer)
+    difference_pct: Mapped[float | None] = mapped_column(Float)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    excluded_outliers: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    confidence: Mapped[str] = mapped_column(String(24), nullable=False)
+    details_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp())
+
+
+class ListingScore(Base):
+    __tablename__ = "listing_scores"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", name="uq_score_snapshot"),
+        Index("ix_scores_listing_computed", "listing_id", "computed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), nullable=False)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("listing_snapshots.id", ondelete="CASCADE"), nullable=False)
+    quality_score: Mapped[int | None] = mapped_column(Integer)
+    coverage_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dimensions_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    explanation_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp())
 
 
 class ScrapeRunMessage(Base):
