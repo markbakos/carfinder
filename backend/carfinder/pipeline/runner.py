@@ -26,6 +26,7 @@ from carfinder.db.models import (
 )
 from carfinder.providers.base import DiscoveredListing, NormalizedListing, ProviderSearchSource, RunContext
 from carfinder.providers.registry import get_provider
+from carfinder.search import matches_filters
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,46 @@ def _changed_fields(previous: ListingSnapshot, current: NormalizedListing) -> di
     return changed
 
 
+def _update_profile_match(
+    session: Session,
+    profile: SearchProfile,
+    source: ProviderSource,
+    listing: Listing,
+    snapshot: ListingSnapshot,
+) -> None:
+    values = {
+        "make": snapshot.make,
+        "model": snapshot.model,
+        "generation": snapshot.generation,
+        "fuel": snapshot.fuel,
+        "transmission": snapshot.transmission,
+        "body_type": snapshot.body_type,
+        "region": snapshot.region,
+        "city": snapshot.city,
+        "location_raw": snapshot.location_raw,
+        "seller_type": snapshot.seller_type,
+        "year": snapshot.year,
+        "price_amount": snapshot.price_amount,
+        "price_currency": snapshot.price_currency,
+        "mileage_km": snapshot.mileage_km,
+        "engine_cc": snapshot.engine_cc,
+        "power_kw": snapshot.power_kw,
+        "condition": snapshot.condition_json,
+    }
+    passes = matches_filters(profile.filters_json, values)
+    match = session.get(ProfileListingMatch, (profile.id, listing.id))
+    if match is None:
+        match = ProfileListingMatch(profile_id=profile.id, listing_id=listing.id)
+        session.add(match)
+    match.hard_filter_pass = passes
+    match.match_details_json = {
+        "source_id": source.id,
+        "selection": "provider_search" if not profile.filters_json else "provider_search_and_hard_filters",
+    }
+    if passes:
+        match.last_matched_at = _utcnow()
+
+
 async def _store_listing(
     session: Session,
     run: ScrapeRun,
@@ -188,18 +229,6 @@ async def _store_listing(
         source_listing.missing_run_count = 0
         source_listing.active = True
 
-    match = session.get(ProfileListingMatch, (profile.id, listing.id))
-    if match is None:
-        match = ProfileListingMatch(
-            profile_id=profile.id,
-            listing_id=listing.id,
-            hard_filter_pass=True,
-            match_details_json={"source_id": source.id, "selection": "provider_search"},
-        )
-        session.add(match)
-    else:
-        match.last_matched_at = now
-
     session_listing = session.get(ListingSnapshot, listing.current_snapshot_id) if listing.current_snapshot_id else None
     should_fetch = (
         created
@@ -208,6 +237,8 @@ async def _store_listing(
     )
     run.listings_seen += 1
     if not should_fetch:
+        if session_listing is not None:
+            _update_profile_match(session, profile, source, listing, session_listing)
         return
 
     run.detail_requests += 1
@@ -231,6 +262,7 @@ async def _store_listing(
     listing.last_detail_fetch_at = now
     digest = _content_hash(normalized_detail)
     if session_listing is not None and session_listing.content_hash == digest:
+        _update_profile_match(session, profile, source, listing, session_listing)
         return
 
     previous = session_listing
@@ -238,6 +270,7 @@ async def _store_listing(
     session.add(snapshot)
     session.flush()
     listing.current_snapshot_id = snapshot.id
+    _update_profile_match(session, profile, source, listing, snapshot)
     if previous is None:
         return
 
@@ -287,7 +320,11 @@ async def _process_source(
     settings: Settings,
 ) -> bool:
     source_model = ProviderSearchSource(
-        id=source.id, provider=source.provider, search_url=source.search_url, profile_id=profile.id
+        id=source.id,
+        provider=source.provider,
+        search_url=source.search_url,
+        profile_id=profile.id,
+        native_filters=profile.filters_json,
     )
     validation = provider.validate_source(source_model)
     if not validation.valid:

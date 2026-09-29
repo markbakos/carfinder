@@ -21,8 +21,9 @@ class ProviderCapabilities(BaseModel):
 class ProviderSearchSource(BaseModel):
     id: int | None = None
     provider: str
-    search_url: str
+    search_url: str | None = None
     profile_id: int | None = None
+    native_filters: dict[str, Any] = Field(default_factory=dict)
 
 
 class ValidationResult(BaseModel):

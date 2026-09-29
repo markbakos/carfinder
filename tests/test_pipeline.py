@@ -185,6 +185,37 @@ def test_failed_search_does_not_count_as_a_removal_miss(monkeypatch, tmp_path: P
     engine.dispose()
 
 
+def test_one_listing_is_shared_and_only_matches_profiles_that_pass_filters(monkeypatch, tmp_path: Path) -> None:
+    settings, database = _initialize(monkeypatch, tmp_path)
+    provider = FakeProvider()
+    monkeypatch.setattr(runner, "get_provider", lambda _provider_id: provider)
+    engine = create_database_engine(database)
+    with Session(engine) as session:
+        nonmatching = session.scalar(select(SearchProfile).where(SearchProfile.name == "Golf V"))
+        assert nonmatching is not None
+        nonmatching.filters_json = {"makes": ["BMW"]}
+        matching = SearchProfile(
+            name="Diesel Golf", filters_json={"makes": ["Volkswagen"], "fuel": ["diesel"]}
+        )
+        session.add(matching)
+        session.flush()
+        session.add(ProviderSource(
+            profile_id=matching.id,
+            provider="polovniautomobili",
+            search_url="https://www.polovniautomobili.com/auto-oglasi/pretraga?brand=volkswagen",
+        ))
+        session.commit()
+
+    summary = asyncio.run(runner.run_pipeline(settings))
+    assert summary.status == "success" and summary.listings_new == 1
+    with Session(engine) as session:
+        assert session.scalar(select(func.count()).select_from(Listing)) == 1
+        matches = session.scalars(select(runner.ProfileListingMatch).order_by(runner.ProfileListingMatch.profile_id)).all()
+        assert len(matches) == 2
+        assert [item.hard_filter_pass for item in matches] == [False, True]
+    engine.dispose()
+
+
 def test_profile_cli_stores_a_valid_imported_search(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CARFINDER_HOME", str(tmp_path / "runtime"))
     assert CliRunner().invoke(app, ["init"]).exit_code == 0

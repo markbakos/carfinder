@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from carfinder.config import Settings
+from carfinder.api.routes import create_router
 from carfinder.db.engine import create_database_engine
 from carfinder.db.migrations import migration_status
 
@@ -16,6 +17,7 @@ from carfinder.db.migrations import migration_status
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or Settings.load()
     app = FastAPI(title="CarFinder", version="0.1.0")
+    app.include_router(create_router(app_settings))
 
     @app.get("/api/health")
     def health() -> dict[str, object]:

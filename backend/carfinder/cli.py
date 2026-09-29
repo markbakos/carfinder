@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from importlib.util import find_spec
 from pathlib import Path
@@ -20,6 +21,7 @@ from carfinder.pipeline.lock import RunAlreadyActive, run_lock
 from carfinder.pipeline.runner import run_pipeline
 from carfinder.providers.base import ProviderSearchSource
 from carfinder.providers.registry import get_provider
+from carfinder.search import HardFilters, filter_dict
 
 app = typer.Typer(no_args_is_help=True, help="Local-first used-car discovery and buying intelligence.")
 db_app = typer.Typer(no_args_is_help=True)
@@ -191,21 +193,30 @@ def serve() -> None:
 @profile_app.command("create")
 def profile_create(
     name: str,
-    search_url: str = typer.Option(..., "--search-url", help="Saved PolovniAutomobili search URL."),
+    search_url: str | None = typer.Option(None, "--search-url", help="Imported PolovniAutomobili search URL."),
+    filters_json: str = typer.Option("{}", "--filters-json", help="Hard filters as a JSON object."),
     provider: str = typer.Option("polovniautomobili", help="Listing provider ID."),
     initial_import_mode: str = typer.Option("seed_only", help="seed_only, analyze_all, or analyze_top_n."),
     analyze_top_n: int = typer.Option(25, min=1, help="Maximum initial listings for analyze_top_n."),
 ) -> None:
-    """Create a profile backed by an imported provider search URL."""
+    """Create a profile backed by native filters, an imported URL, or both."""
     if initial_import_mode not in {"seed_only", "analyze_all", "analyze_top_n"}:
         typer.echo("initial-import-mode must be seed_only, analyze_all, or analyze_top_n", err=True)
+        raise typer.Exit(2)
+    try:
+        filters = filter_dict(HardFilters.model_validate_json(filters_json))
+    except Exception as error:
+        typer.echo(f"Invalid filters JSON: {error}", err=True)
+        raise typer.Exit(2) from error
+    if not search_url and not filters:
+        typer.echo("Provide --search-url or non-empty --filters-json", err=True)
         raise typer.Exit(2)
     try:
         adapter = get_provider(provider)
     except ValueError as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(2) from error
-    source = ProviderSearchSource(provider=provider, search_url=search_url)
+    source = ProviderSearchSource(provider=provider, search_url=search_url, native_filters=filters)
     result = adapter.validate_source(source)
     if not result.valid:
         typer.echo(result.message, err=True)
@@ -215,17 +226,19 @@ def profile_create(
     engine = create_database_engine(settings.database_path)
     try:
         with Session(engine) as session:
-            profile = SearchProfile(name=name, initial_import_mode=initial_import_mode)
+            profile = SearchProfile(name=name, filters_json=filters, initial_import_mode=initial_import_mode)
             session.add(profile)
             session.flush()
             session.add(ProviderSource(
                 profile_id=profile.id,
                 provider=provider,
-                search_url=search_url.strip(),
+                search_url=search_url.strip() if search_url else None,
                 source_settings_json={"analyze_top_n": analyze_top_n} if initial_import_mode == "analyze_top_n" else {},
             ))
             session.commit()
             typer.echo(f"Created profile #{profile.id}: {profile.name}")
+            if filters:
+                typer.echo(f"Hard filters: {json.dumps(filters, ensure_ascii=False, sort_keys=True)}")
     except Exception as error:
         typer.echo(f"Could not create profile: {error}", err=True)
         raise typer.Exit(1) from error
@@ -264,9 +277,11 @@ def profile_show(profile_id: int) -> None:
                 raise typer.Exit(1)
             typer.echo(f"Profile #{item.id}: {item.name}")
             typer.echo(f"Enabled: {item.enabled}; initial import: {item.initial_import_mode}")
+            typer.echo(f"Hard filters: {json.dumps(item.filters_json, ensure_ascii=False, sort_keys=True)}")
+            typer.echo(f"Preferences: {json.dumps(item.preferences_json, ensure_ascii=False, sort_keys=True)}")
             for source in session.scalars(select(ProviderSource).where(ProviderSource.profile_id == item.id)):
                 typer.echo(f"Source #{source.id} [{source.provider}] {'enabled' if source.enabled else 'disabled'}")
-                typer.echo(f"  {source.search_url}")
+                typer.echo(f"  {source.search_url or 'native filters'}")
     finally:
         engine.dispose()
 

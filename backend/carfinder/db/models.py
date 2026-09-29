@@ -53,7 +53,7 @@ class ProviderSource(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     profile_id: Mapped[int] = mapped_column(ForeignKey("search_profiles.id", ondelete="CASCADE"), nullable=False)
     provider: Mapped[str] = mapped_column(String(48), nullable=False)
-    search_url: Mapped[str] = mapped_column(Text, nullable=False)
+    search_url: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True, server_default=text("1"))
     source_settings_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     first_scan_completed: Mapped[bool] = mapped_column(nullable=False, default=False, server_default=text("0"))

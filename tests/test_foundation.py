@@ -36,7 +36,7 @@ def test_init_migrates_sqlite_with_required_pragmas(monkeypatch, tmp_path: Path)
 
     database = tmp_path / "runtime/data/carfinder.sqlite3"
     current, head = migration_status(database)
-    assert current == head == "4fbe7604a7a8"
+    assert current == head == "2a5c71f0c19b"
 
     engine = create_database_engine(database)
     try:
@@ -50,4 +50,4 @@ def test_init_migrates_sqlite_with_required_pragmas(monkeypatch, tmp_path: Path)
 
 def test_migration_head_is_defined() -> None:
     config_path = Path(__file__).parents[1] / "backend/carfinder/alembic.ini"
-    assert ScriptDirectory.from_config(Config(str(config_path))).get_current_head() == "4fbe7604a7a8"
+    assert ScriptDirectory.from_config(Config(str(config_path))).get_current_head() == "2a5c71f0c19b"
